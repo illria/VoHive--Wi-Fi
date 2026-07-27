@@ -1,9 +1,9 @@
 # VoHive portable builds
 
-本仓库用 GitHub Actions 构建 VoHive 的 Linux 多架构二进制，并提供一键安装。
+本仓库用 GitHub Actions 构建 VoHive 的 Linux 多架构二进制，并提供一键安装。由于旧版 `install.sh` 可能被 Raw CDN 缓存，当前推荐使用全新的 `install-v2.sh` 入口。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install-v2.sh | sh
 ```
 
 安装器按 `uname -m` 选择 amd64、arm64 或 armv7，下载 `portable` Release 并校验 SHA-256；你的 `aarch64` 设备使用 arm64 产物。默认安装到 `/opt/vohive`，后台端口 7575，默认账号密码 `admin/admin`。
