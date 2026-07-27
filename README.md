@@ -1,9 +1,9 @@
 # VoHive portable builds
 
-本仓库用 GitHub Actions 构建 VoHive 的 Linux 多架构二进制，并提供一键安装。安装器已避免与 Debian `/etc/os-release` 中的 `VERSION` 字段冲突，当前推荐使用 `install-v2.sh` 入口。
+本仓库用 GitHub Actions 构建 VoHive 的 Linux 多架构二进制，并提供一键安装。安装器已避免与 Debian `/etc/os-release` 中的 `VERSION` 字段冲突，当前推荐使用 `install-portable.sh 入口。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install-v2.sh | sh
+curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install-portable.sh | sh
 ```
 
 安装器按 `uname -m` 选择 amd64、arm64 或 armv7，下载 `portable` Release 并校验 SHA-256；你的 `aarch64` 设备使用 arm64 产物。默认安装到 `/opt/vohive`，后台端口 7575，默认账号密码 `admin/admin`。
