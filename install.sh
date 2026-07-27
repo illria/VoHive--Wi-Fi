@@ -69,6 +69,15 @@ sha256_check() {
   fi
 }
 
+validate_version() {
+  case "$VERSION" in
+    ''|*[!A-Za-z0-9._-]*)
+      log "警告: VOHIVE_VERSION="$VERSION" 不是合法发布版本，已回退到 portable"
+      VERSION=portable
+      ;;
+  esac
+}
+
 detect_platform() {
   [ "$(uname -s)" = Linux ] || die "当前系统不是 Linux: $(uname -s)"
 
@@ -147,6 +156,7 @@ main() {
     esac
   done
 
+  validate_version
   detect_platform
   TMP="$(mktemp -d)"
 
