@@ -1,6 +1,6 @@
 # VoHive portable builds
 
-本仓库用 GitHub Actions 构建 VoHive 的 Linux 多架构二进制，并提供一键安装。由于旧版 `install.sh` 可能被 Raw CDN 缓存，当前推荐使用全新的 `install-v2.sh` 入口。
+本仓库用 GitHub Actions 构建 VoHive 的 Linux 多架构二进制，并提供一键安装。安装器已避免与 Debian `/etc/os-release` 中的 `VERSION` 字段冲突，当前推荐使用 `install-v2.sh` 入口。
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install-v2.sh | sh
