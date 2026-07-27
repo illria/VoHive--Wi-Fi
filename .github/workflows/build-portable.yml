@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" GOARM="$GOARM" go build -trimpath -buildvcs=false -tags "with_utls nomsgpack" -ldflags "-s -w -X github.com/iniwex5/vohive/internal/global.Version=portable" -o dist/vohive
+          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" GOARM="$GOARM" go build -trimpath -buildvcs=false -tags "with_utls nomsgpack" -ldflags "-s -w -X github.com/iniwex5/vohive/internal/global.Version=portable" -o dist/vohive ./cmd/vohive
       - name: Package
         env:
           ARCH: ${{ matrix.artifact_arch }}
