@@ -15,7 +15,7 @@ banner() {
 }
 
 REPO="${VOHIVE_REPO:-illria/VoHive--Wi-Fi}"
-VERSION="${VOHIVE_VERSION:-portable}"
+RELEASE_TAG="${VOHIVE_VERSION:-portable}"
 ROOT="${VOHIVE_INSTALL_ROOT:-/opt/vohive}"
 BIN_DIR="$ROOT/bin"
 CFG_DIR="$ROOT/config"
@@ -70,10 +70,10 @@ sha256_check() {
 }
 
 validate_version() {
-  case "$VERSION" in
+  case "$RELEASE_TAG" in
     ''|*[!A-Za-z0-9._-]*)
-      log "警告: VOHIVE_VERSION="$VERSION" 不是合法发布版本，已回退到 portable"
-      VERSION=portable
+      log "警告: VOHIVE_VERSION="$RELEASE_TAG" 不是合法发布版本，已回退到 portable"
+      RELEASE_TAG=portable
       ;;
   esac
 }
@@ -161,8 +161,8 @@ main() {
   TMP="$(mktemp -d)"
 
   if [ -z "$LOCAL_BIN" ]; then
-    ASSET="vohive_${VERSION}_linux_${ARCH}.tar.gz"
-    BASE="https://github.com/$REPO/releases/download/$VERSION"
+    ASSET="vohive_${RELEASE_TAG}_linux_${ARCH}.tar.gz"
+    BASE="https://github.com/$REPO/releases/download/$RELEASE_TAG"
     download "$BASE/$ASSET" "$TMP/$ASSET"
     download "$BASE/$ASSET.sha256" "$TMP/$ASSET.sha256"
     sha256_check "$TMP/$ASSET" "$TMP/$ASSET.sha256"
