@@ -136,6 +136,10 @@ jobs:
     if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -151,10 +155,6 @@ jobs:
           make_latest: false
           overwrite_files: true
           files: release/*
-      - name: Commit binaries into dist
-        uses: actions/checkout@v4
-        with:
-          ref: main
       - name: Update repository dist
         shell: bash
         run: |
