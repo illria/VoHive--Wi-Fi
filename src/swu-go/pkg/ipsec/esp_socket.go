@@ -75,10 +75,7 @@ func (s *ESPSocket) Receive() ([]byte, error) {
 	buf := make([]byte, 2048)
 
 	// 设置读取超时
-	tv := syscall.Timeval{
-		Sec:  int64(s.timeout / time.Second),
-		Usec: int64((s.timeout % time.Second) / time.Microsecond),
-	}
+	tv := syscall.NsecToTimeval(s.timeout.Nanoseconds())
 	syscall.SetsockoptTimeval(s.rawFd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
 
 	n, err := syscall.Read(s.rawFd, buf)
@@ -197,7 +194,7 @@ func (s *ESPSocketUDP) Receive() ([]byte, error) {
 	return buf[:n], nil
 }
 
-// Close 关闭套接字
+// Close 关闭 UDP 套接字
 func (s *ESPSocketUDP) Close() error {
 	return s.conn.Close()
 }
