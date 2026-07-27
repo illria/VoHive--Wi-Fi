@@ -1,6 +1,19 @@
 #!/bin/sh
 set -eu
 
+# VoHive portable installer
+# Author: Eianun | X: @Eianunbits
+AUTHOR_NAME="Eianun"
+AUTHOR_X="@Eianunbits"
+
+banner() {
+  printf '\n'
+  printf '============================================================\n'
+  printf ' VoHive 一键安装器\n'
+  printf ' 作者: %s | X: %s\n' "$AUTHOR_NAME" "$AUTHOR_X"
+  printf '============================================================\n'
+}
+
 REPO="${VOHIVE_REPO:-illria/VoHive--Wi-Fi}"
 VERSION="${VOHIVE_VERSION:-portable}"
 ROOT="${VOHIVE_INSTALL_ROOT:-/opt/vohive}"
@@ -108,6 +121,7 @@ deps() {
 }
 
 main() {
+  banner
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --local-bin)
