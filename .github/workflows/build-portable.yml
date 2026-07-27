@@ -1,0 +1,102 @@
+name: Build VoHive portable Linux releases
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: vohive-portable-build
+  cancel-in-progress: false
+env:
+  SOURCE_REPO: hzlmy2002/vohive-collection
+  SOURCE_REF: 0c3052c524865a92d546f8fea12d873214c5f8e3
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goarch: amd64, goarm: "", artifact_arch: amd64}
+          - {goarch: arm64, goarm: "", artifact_arch: arm64}
+          - {goarch: arm, goarm: "7", artifact_arch: armv7}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned source
+        run: |
+          git clone https://github.com/${{ env.SOURCE_REPO }}.git source
+          git -C source checkout --detach "${{ env.SOURCE_REF }}"
+      - uses: actions/setup-node@v4
+        with: {node-version: "20"}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: source/vohive/go.mod
+          cache: false
+      - name: Build frontend
+        working-directory: source/vohive
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          rm -rf internal/web/dist
+          mkdir -p internal/web
+          cp -R web/dist internal/web/dist
+      - name: Create local Go workspace
+        working-directory: source
+        run: |
+          cat > go.work <<'EOF'
+          go 1.26.3
+          use (
+            ./vohive
+            ./vowifi-go
+            ./swu-go
+            ./quectel-qmi-go
+            ./netlink
+            ./qqbot
+            ./euicc-go
+            ./uicc-go
+          )
+          EOF
+      - name: Build binary
+        working-directory: source/vohive
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" GOARM="$GOARM" go build -trimpath -buildvcs=false -tags "with_utls nomsgpack" -ldflags "-s -w -X github.com/iniwex5/vohive/internal/global.Version=portable" -o dist/vohive
+      - name: Package
+        env:
+          ARCH: ${{ matrix.artifact_arch }}
+        run: |
+          set -euo pipefail
+          rm -rf release package; mkdir -p release package
+          cp source/vohive/dist/vohive package/vohive
+          cp install.sh package/install.sh
+          chmod 0755 package/vohive package/install.sh
+          tar -czf "release/vohive_portable_linux_$ARCH.tar.gz" -C package vohive install.sh
+          (cd release && sha256sum "vohive_portable_linux_$ARCH.tar.gz" > "vohive_portable_linux_$ARCH.tar.gz.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vohive-${{ matrix.artifact_arch }}
+          path: release/*
+          retention-days: 14
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vohive-*
+          merge-multiple: true
+          path: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: portable
+          name: VoHive portable builds
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          files: release/*
