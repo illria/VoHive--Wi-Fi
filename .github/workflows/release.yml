@@ -77,7 +77,7 @@ jobs:
       - name: Upload embedded frontend
         uses: actions/upload-artifact@v4
         with:
-          name: vohive-release-web-${{ github.run_id }}
+          name: vohive-web-dist-release-${{ github.run_id }}
           path: src/vohive/web/dist
           if-no-files-found: error
           retention-days: 3
@@ -102,7 +102,7 @@ jobs:
       - name: Restore embedded frontend
         uses: actions/download-artifact@v4
         with:
-          name: vohive-release-web-${{ github.run_id }}
+          name: vohive-web-dist-release-${{ github.run_id }}
           path: src/vohive/web/dist
 
       - name: Prepare embedded frontend directory
@@ -136,6 +136,11 @@ jobs:
           )
           EOF
 
+      - name: Run amd64 release test suite
+        if: matrix.artifact_arch == 'amd64'
+        working-directory: src/vohive
+        run: CGO_ENABLED=0 GOOS=linux go test -tags "with_utls nomsgpack" ./...
+
       - name: Build and package release assets
         working-directory: src/vohive
         env:
@@ -154,10 +159,15 @@ jobs:
             -o "dist/$BINARY" ./cmd/vohive
           test -s "dist/$BINARY"
           test "$(stat -c '%s' "dist/$BINARY")" -gt 65536
+          if [ "$GOARCH" = "amd64" ]; then
+            "dist/$BINARY" -h >/dev/null 2>&1
+          fi
           cp "dist/$BINARY" "release/$BINARY"
           (cd release && sha256sum "$BINARY" > "$BINARY.sha256")
           cp "dist/$BINARY" package/vohive
-          cp install.sh package/install.sh
+          INSTALLER="$GITHUB_WORKSPACE/install.sh"
+          test -r "$INSTALLER"
+          cp "$INSTALLER" package/install.sh
           chmod 0755 package/vohive package/install.sh
           ARCHIVE="vohive_${VERSION}_linux_${{ matrix.artifact_arch }}.tar.gz"
           tar -czf "release/$ARCHIVE" -C package vohive install.sh
@@ -179,7 +189,7 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          pattern: vohive-release-*-*
+          pattern: vohive-release-*
           merge-multiple: true
           path: release
 
@@ -204,11 +214,18 @@ jobs:
           version, commit, build_time = sys.argv[1:]
           root = pathlib.Path("release")
           assets = {}
+          expected = set()
           for arch in ("amd64", "arm64", "armv7"):
               binary = root / f"vohive_{version}_linux_{arch}"
               archive = root / f"vohive_{version}_linux_{arch}.tar.gz"
               if not binary.is_file() or not archive.is_file():
                   raise SystemExit(f"missing release asset for {arch}")
+              expected.update({
+                  binary.name,
+                  f"{binary.name}.sha256",
+                  archive.name,
+                  f"{archive.name}.sha256",
+              })
               assets[f"linux_{arch}"] = {
                   "name": binary.name,
                   "sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
@@ -217,6 +234,11 @@ jobs:
                   "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                   "archive_size": archive.stat().st_size,
               }
+          actual = {path.name for path in root.iterdir() if path.is_file()}
+          if actual != expected:
+              raise SystemExit(
+                  f"unexpected release assets: expected {sorted(expected)}, found {sorted(actual)}"
+              )
           manifest = {
               "version": version,
               "build_time": build_time,
