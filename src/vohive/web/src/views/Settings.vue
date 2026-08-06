@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useSettingsStore } from '../stores/settings'
 import PageHeader from '../components/PageHeader.vue'
 import FieldRow from '../components/FieldRow.vue'
+import { COMMUNITY_URL } from '../constants/branding'
 import { 
   Key24Regular, 
   Save24Regular,
@@ -399,7 +400,7 @@ onBeforeUnmount(() => {
               <FieldRow label="配置路径" :value="systemInfo.config" monospace copyable />
             </div>
             <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
-              <FieldRow label="交流群" value="https://t.me/vohive" monospace copyable />
+              <FieldRow label="交流群" :value="COMMUNITY_URL" monospace copyable />
             </div>
             <div class="ui-panel-muted px-4 py-4">
               <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
