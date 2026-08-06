@@ -60,16 +60,17 @@ const shell = computed(() =>
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 4px;
+  background: var(--vh-border-strong);
+  border: 2px solid var(--vh-bg);
+  border-radius: 999px;
 }
 .dark ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--vh-border-strong);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--vh-text-subtle);
 }
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: var(--vh-text-subtle);
 }
 </style>

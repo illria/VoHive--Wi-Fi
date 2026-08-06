@@ -85,32 +85,46 @@ onMounted(() => {
 </script>
 
 <template>
-  <div>
+  <div class="dashboard-page">
     <PageHeader title="设备监控" subtitle="实时查看设备状态与出口 IP">
       <template #actions>
         <RefreshButton :loading="loading" @click="fetchDevices" />
       </template>
     </PageHeader>
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      <div class="ui-panel p-4">
-        <div class="text-xs text-gray-400">设备总数</div>
-        <div class="text-2xl font-extrabold mt-1">{{ totalCount }}</div>
+    <div class="dashboard-overview">
+      <div class="dashboard-overview-copy">正在监控 <strong>{{ totalCount }} 台设备</strong> 的连接状态与出口信息</div>
+      <div class="dashboard-system-status">系统正常</div>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">设备总数</div>
+        <div class="metric-value">{{ totalCount }}</div>
+        <div class="metric-note">已接入设备</div>
       </div>
-      <div class="ui-panel p-4">
-        <div class="text-xs text-gray-400">在线</div>
-        <div class="text-2xl font-extrabold mt-1 text-green-600 dark:text-green-400">{{ onlineCount }}</div>
+      <div class="metric-card">
+        <div class="metric-label">在线设备</div>
+        <div class="metric-value">{{ onlineCount }}</div>
+        <div class="metric-note">当前可用连接</div>
       </div>
-      <div class="ui-panel p-4">
-        <div class="text-xs text-gray-400">离线</div>
-        <div class="text-2xl font-extrabold mt-1 text-red-600 dark:text-red-400">{{ offlineCount }}</div>
+      <div class="metric-card">
+        <div class="metric-label">离线设备</div>
+        <div class="metric-value">{{ offlineCount }}</div>
+        <div class="metric-note">需要关注的连接</div>
       </div>
-      <div class="ui-panel p-4">
-        <div class="text-xs text-gray-400">最近刷新</div>
-        <div class="text-sm font-mono mt-2 text-gray-600 dark:text-gray-300">
+      <div class="metric-card">
+        <div class="metric-label">最近刷新</div>
+        <div class="metric-value metric-value-time">
           {{ lastUpdatedAt ? new Date(lastUpdatedAt).toLocaleTimeString() : '--:--:--' }}
         </div>
+        <div class="metric-note">数据轮询间隔 5 秒</div>
       </div>
+    </div>
+
+    <div class="section-heading">
+      <h2>设备</h2>
+      <span>{{ onlineCount }} online / {{ totalCount }} total</span>
     </div>
 
     <ErrorState
@@ -131,7 +145,7 @@ onMounted(() => {
     <EmptyState v-else-if="devices.length === 0" title="暂无设备接入" subtitle="请先在设备管理中添加或接管设备" />
 
     <!-- Grid View -->
-    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-5">
+    <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
       <DeviceCard
         v-for="dev in devices"
         :key="dev.id"
