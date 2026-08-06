@@ -258,6 +258,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.GET("/system/info", s.handleSystemInfo)            // 获取系统运行与版本信息
 		api.GET("/system/update/check", s.handleCheckUpdate)   // 检查系统更新
 		api.POST("/system/update/apply", s.handleApplyUpdate)  // 应用系统更新
+		api.GET("/system/update/status", s.handleUpdateStatus) // 轮询更新状态
 
 		api.GET("/devices", s.handleDeviceMgmtList)                                            // 获取设备列表（管理页用）
 		api.POST("/devices", s.handleDeviceMgmtAddDevice)                                      // 添加新设备
@@ -2207,6 +2208,7 @@ func (s *Server) handleSystemInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"version":    global.Version,
 		"build_time": global.BuildTime,
+		"commit":     global.Commit,
 		"config":     viper.ConfigFileUsed(),
 		"docs":       currentAPIDocsLinks(),
 	})

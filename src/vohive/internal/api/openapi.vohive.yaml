@@ -593,6 +593,52 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /system/update/check:
+    get:
+      tags: [settings]
+      summary: 检查系统更新
+      responses:
+        '200':
+          description: 更新检查结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemUpdateInfo'
+        '400':
+          $ref: '#/components/responses/ErrorMessage'
+        '502':
+          $ref: '#/components/responses/ErrorMessage'
+
+  /system/update/apply:
+    post:
+      tags: [settings]
+      summary: 开始应用系统更新
+      responses:
+        '202':
+          description: 更新任务已开始
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemUpdateStatus'
+        '400':
+          $ref: '#/components/responses/ErrorMessage'
+        '409':
+          $ref: '#/components/responses/ErrorMessage'
+        '500':
+          $ref: '#/components/responses/ErrorMessage'
+
+  /system/update/status:
+    get:
+      tags: [settings]
+      summary: 获取系统更新状态
+      responses:
+        '200':
+          description: 更新任务状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemUpdateStatus'
+
   /devices:
     get:
       tags: [devices]
@@ -1729,10 +1775,58 @@ components:
           type: string
         build_time:
           type: string
+        commit:
+          type: string
         config:
           type: string
         docs:
           $ref: '#/components/schemas/DocsLinks'
+
+    SystemUpdateInfo:
+      type: object
+      properties:
+        has_update:
+          type: boolean
+        current_version:
+          type: string
+        latest_version:
+          type: string
+        release_note:
+          type: string
+        is_docker:
+          type: boolean
+        migration_required:
+          type: boolean
+        supported:
+          type: boolean
+        channel:
+          type: string
+
+    SystemUpdateStatus:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, checking, available, downloading, verifying, backing_up, applying, restarting, success, failed, rolled_back]
+        current_version:
+          type: string
+        target_version:
+          type: string
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        message:
+          type: string
+        error:
+          type: string
+        error_code:
+          type: string
+        backup_path:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
 
     LoginRequest:
       type: object
