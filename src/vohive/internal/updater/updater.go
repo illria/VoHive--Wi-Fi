@@ -303,7 +303,7 @@ func (m *Manager) CheckUpdate() (*UpdateInfo, error) {
 		return nil, newUpdateError(ErrInvalidCurrentVersion, "当前版本不是合法 SemVer", nil)
 	}
 
-	_, supported := assetKey(runtime.GOOS, runtime.GOARCH, runtime.GOARM)
+	_, supported := runtimeAssetKey()
 	hasUpdate := false
 	if legacy {
 		hasUpdate = true
@@ -374,7 +374,7 @@ func (m *Manager) runUpdate() {
 	}
 	m.setState(StateAvailable, 0, "发现可用更新", latestVersion)
 
-	arch, supported := assetKey(runtime.GOOS, runtime.GOARCH, runtime.GOARM)
+	arch, supported := runtimeAssetKey()
 	if !supported {
 		m.fail(newUpdateError(ErrUnsupportedArchitecture, "当前系统架构没有对应 Release 资产", nil))
 		return
@@ -565,6 +565,12 @@ func assetKey(goos, goarch, goarm string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func runtimeAssetKey() (string, bool) {
+	// GOARM selects the arm build at compile time but is not exposed by runtime.
+	// The release matrix only publishes the supported armv7 variant.
+	return assetKey(runtime.GOOS, runtime.GOARCH, "7")
 }
 
 func findAssets(assets []Asset, binaryName string) (Asset, Asset, error) {
