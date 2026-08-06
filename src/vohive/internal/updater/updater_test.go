@@ -260,6 +260,34 @@ func TestDownloadBinaryWritesAndEnforcesSize(t *testing.T) {
 	}
 }
 
+func TestDownloadRejectsHTTPTimeoutAndEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/http-error":
+			writer.WriteHeader(http.StatusBadGateway)
+		case "/empty":
+			return
+		case "/slow":
+			time.Sleep(50 * time.Millisecond)
+			_, _ = io.WriteString(writer, "late response")
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	manager := newTestManager(t, server.URL, nil, nil)
+	if _, err := manager.downloadBinary(Asset{BrowserDownloadURL: server.URL + "/http-error"}, t.TempDir(), "v1.2.0"); ErrorCodeOf(err) != string(ErrDownloadFailed) {
+		t.Fatalf("expected download_failed for HTTP error, got %v", err)
+	}
+	if _, err := manager.downloadBinary(Asset{BrowserDownloadURL: server.URL + "/empty"}, t.TempDir(), "v1.2.0"); ErrorCodeOf(err) != string(ErrDownloadFailed) {
+		t.Fatalf("expected download_failed for empty file, got %v", err)
+	}
+	manager.httpClient = &http.Client{Timeout: time.Millisecond}
+	if _, err := manager.downloadBinary(Asset{BrowserDownloadURL: server.URL + "/slow"}, t.TempDir(), "v1.2.0"); ErrorCodeOf(err) != string(ErrDownloadFailed) {
+		t.Fatalf("expected download_failed for timeout, got %v", err)
+	}
+}
+
 func TestDownloadChecksumAndVerify(t *testing.T) {
 	payload := []byte("checksum-payload")
 	digest := sha256.Sum256(payload)
@@ -320,6 +348,51 @@ func TestReplaceAndRollback(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(executable); string(got) != "old-version" {
 		t.Fatalf("rollback did not restore old executable: %q", got)
+	}
+}
+
+func TestBackupFailureAndReplaceFailureRestore(t *testing.T) {
+	root := t.TempDir()
+	backupDir := filepath.Join(root, "backup")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missingExecutable := filepath.Join(root, "missing-vohive")
+	manager := NewManager(Options{
+		Executable: func() (string, error) { return missingExecutable, nil },
+		IsDocker:   func() bool { return false },
+	})
+	source := filepath.Join(root, "download")
+	if err := os.WriteFile(source, []byte("new-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.replaceBinary(source, missingExecutable, backupDir); ErrorCodeOf(err) != string(ErrBackupFailed) {
+		t.Fatalf("expected backup_failed, got %v", err)
+	}
+
+	executable := filepath.Join(root, "vohive")
+	if err := os.WriteFile(executable, []byte("old-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	missingSource := filepath.Join(root, "missing-download")
+	if _, err := manager.replaceBinary(missingSource, executable, backupDir); ErrorCodeOf(err) != string(ErrReplaceFailed) {
+		t.Fatalf("expected replace_failed, got %v", err)
+	}
+	if got, err := os.ReadFile(executable); err != nil || string(got) != "old-version" {
+		t.Fatalf("replace failure did not restore old executable: %q, error=%v", got, err)
+	}
+}
+
+func TestUpdateStateFlow(t *testing.T) {
+	manager := newTestManager(t, "http://127.0.0.1:1", nil, nil)
+	manager.setState(StateChecking, 0, "正在检查更新", "")
+	manager.setState(StateDownloading, 43, "正在下载更新", "v1.0.1")
+	manager.setState(StateVerifying, 43, "正在验证 SHA-256", "v1.0.1")
+	manager.setState(StateApplying, 80, "正在替换当前版本", "v1.0.1")
+	manager.setState(StateRestarting, 100, "更新已应用，等待服务重启", "v1.0.1")
+	status := manager.Status()
+	if status.State != StateRestarting || status.TargetVersion != "v1.0.1" || status.Progress != 100 {
+		t.Fatalf("unexpected final state: %+v", status)
 	}
 }
 
