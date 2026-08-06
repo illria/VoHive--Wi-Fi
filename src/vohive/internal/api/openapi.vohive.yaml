@@ -30,6 +30,8 @@ tags:
     description: 前置代理与国家规则
   - name: esim
     description: eSIM 与 eUICC 管理
+  - name: sim-security
+    description: 物理 SIM 与 eUICC 活跃 profile 的 PIN 状态和单次解锁
   - name: vowifi
     description: VoWiFi 控制
   - name: logs
@@ -593,6 +595,52 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /system/update/check:
+    get:
+      tags: [settings]
+      summary: 检查系统更新
+      responses:
+        '200':
+          description: 更新检查结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemUpdateInfo'
+        '400':
+          $ref: '#/components/responses/ErrorMessage'
+        '502':
+          $ref: '#/components/responses/ErrorMessage'
+
+  /system/update/apply:
+    post:
+      tags: [settings]
+      summary: 开始应用系统更新
+      responses:
+        '202':
+          description: 更新任务已开始
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemUpdateStatus'
+        '400':
+          $ref: '#/components/responses/ErrorMessage'
+        '409':
+          $ref: '#/components/responses/ErrorMessage'
+        '500':
+          $ref: '#/components/responses/ErrorMessage'
+
+  /system/update/status:
+    get:
+      tags: [settings]
+      summary: 获取系统更新状态
+      responses:
+        '200':
+          description: 更新任务状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemUpdateStatus'
+
   /devices:
     get:
       tags: [devices]
@@ -679,6 +727,75 @@ paths:
                       $ref: '#/components/schemas/DeviceMgmtOverviewLiteItem'
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /devices/{device_id}/sim/security:
+    get:
+      tags: [sim-security]
+      summary: 获取 SIM 安全状态
+      description: |
+        读取 QMI UIM GetCardStatus 的完整卡状态、当前 PIN1/UPIN 类型和剩余次数。
+        仅针对当前物理 SIM 或 eUICC 活跃 profile；不读取或保存 PIN，不执行 PUK、改 PIN、启停 PIN 或自动重试。
+      parameters:
+        - $ref: '#/components/parameters/DeviceIDPath'
+      responses:
+        '200':
+          description: SIM 安全状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SIMSecurityState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ErrorMessage'
+        '409':
+          $ref: '#/components/responses/ErrorMessage'
+        '501':
+          $ref: '#/components/responses/ErrorMessage'
+        '503':
+          $ref: '#/components/responses/ErrorMessage'
+    post:
+      tags: [sim-security]
+      summary: 验证 SIM PIN
+      description: |
+        服务端先读取状态，仅在需要 PIN 且仍有次数时发送一次 QMI UIM VerifyPIN，随后重新读取状态。
+        请求体严格限制为 application/json 的 `{"pin":"1234"}`，PIN 只存在于本次请求内，不进入日志、配置、数据库、URL、SSE 或通知。
+        不执行 PIN 重试、PUK 解锁、改 PIN、启停 PIN、AT CPIN、qmicli/mmcli、复位或 worker 重建。
+      parameters:
+        - $ref: '#/components/parameters/DeviceIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifySIMPINRequest'
+      responses:
+        '200':
+          description: PIN 验证成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SIMPINVerifyResponse'
+        '400':
+          description: PIN 格式或 JSON 请求体无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SIMSecurityErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ErrorMessage'
+        '409':
+          $ref: '#/components/responses/ErrorMessage'
+        '422':
+          $ref: '#/components/responses/ErrorMessage'
+        '423':
+          $ref: '#/components/responses/ErrorMessage'
+        '501':
+          $ref: '#/components/responses/ErrorMessage'
+        '503':
+          $ref: '#/components/responses/ErrorMessage'
 
   /devices/{device_id}/config:
     get:
@@ -1681,6 +1798,80 @@ components:
         busy:
           type: boolean
 
+    SIMSecurityState:
+      type: object
+      required: [status, pin_required, puk_required, blocked, uses_upin, can_verify_pin, backend]
+      properties:
+        status:
+          type: string
+          enum: [ready, pin_required, puk_required, blocked, absent, network_locked, initializing, unavailable, unsupported]
+        pin_kind:
+          type: string
+          enum: [pin1, upin]
+        pin_required:
+          type: boolean
+        puk_required:
+          type: boolean
+        blocked:
+          type: boolean
+        uses_upin:
+          type: boolean
+        pin_retries:
+          type: integer
+          minimum: 0
+        puk_retries:
+          type: integer
+          minimum: 0
+        can_verify_pin:
+          type: boolean
+        backend:
+          type: string
+          example: qmi
+        updated_at:
+          type: string
+          format: date-time
+
+    VerifySIMPINRequest:
+      type: object
+      additionalProperties: false
+      required: [pin]
+      properties:
+        pin:
+          type: string
+          format: password
+          minLength: 4
+          maxLength: 8
+          pattern: '^[0-9]{4,8}$'
+          example: '1234'
+
+    SIMSecurityErrorResponse:
+      type: object
+      required: [ok, code, message]
+      properties:
+        ok:
+          type: boolean
+          example: false
+        code:
+          type: string
+          enum: [invalid_sim_pin_format, device_not_found, device_not_running, sim_security_unavailable, sim_pin_not_required, sim_puk_required, sim_blocked, sim_absent, sim_network_locked, sim_pin_incorrect, sim_pin_verify_failed, sim_pin_operation_in_progress, device_recovering, unsupported_backend, qmi_uim_unavailable]
+        message:
+          type: string
+        security:
+          $ref: '#/components/schemas/SIMSecurityState'
+
+    SIMPINVerifyResponse:
+      type: object
+      required: [ok, message, security]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: SIM PIN 验证成功
+        security:
+          $ref: '#/components/schemas/SIMSecurityState'
+
     StatusResponse:
       type: object
       properties:
@@ -1729,10 +1920,58 @@ components:
           type: string
         build_time:
           type: string
+        commit:
+          type: string
         config:
           type: string
         docs:
           $ref: '#/components/schemas/DocsLinks'
+
+    SystemUpdateInfo:
+      type: object
+      properties:
+        has_update:
+          type: boolean
+        current_version:
+          type: string
+        latest_version:
+          type: string
+        release_note:
+          type: string
+        is_docker:
+          type: boolean
+        migration_required:
+          type: boolean
+        supported:
+          type: boolean
+        channel:
+          type: string
+
+    SystemUpdateStatus:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, checking, available, downloading, verifying, backing_up, applying, restarting, success, failed, rolled_back]
+        current_version:
+          type: string
+        target_version:
+          type: string
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        message:
+          type: string
+        error:
+          type: string
+        error_code:
+          type: string
+        backup_path:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
 
     LoginRequest:
       type: object

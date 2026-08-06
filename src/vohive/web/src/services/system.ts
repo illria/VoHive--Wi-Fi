@@ -13,11 +13,40 @@ export type UpdateInfo = {
   latest_version: string
   release_note: string
   is_docker: boolean
+  migration_required: boolean
+  supported: boolean
+  channel: string
+}
+
+export type UpdateState =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'verifying'
+  | 'backing_up'
+  | 'applying'
+  | 'restarting'
+  | 'success'
+  | 'failed'
+  | 'rolled_back'
+
+export type UpdateStatus = {
+  state: UpdateState
+  current_version: string
+  target_version: string
+  progress: number
+  message: string
+  error: string
+  error_code: string
+  backup_path?: string
+  updated_at: string
 }
 
 export type SystemInfo = {
   version: string
   build_time: string
+  commit: string
   config: string
   docs: DocsLinks
 }
@@ -253,7 +282,13 @@ export const systemService = {
   },
   applyUpdate() {
     return callService(async () => {
-      const res = await api.post<{ message: string }>('/system/update/apply', {})
+      const res = await api.post<UpdateStatus>('/system/update/apply', {})
+      return res.data
+    })
+  },
+  getUpdateStatus() {
+    return callService(async () => {
+      const res = await api.get<UpdateStatus>('/system/update/status')
       return res.data
     })
   }

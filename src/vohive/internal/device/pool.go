@@ -133,6 +133,10 @@ type Worker struct {
 	qmiRegistrationMu       sync.Mutex
 	qmiRegistrationInFlight bool
 
+	// simAuthMu serializes only SIM security status/PIN operations for this
+	// worker. It does not cover unrelated device actions or identity refresh.
+	simAuthMu sync.Mutex
+
 	operatorScanMu      sync.Mutex
 	operatorScanCurrent OperatorScanResult
 	operatorScanCancel  context.CancelFunc

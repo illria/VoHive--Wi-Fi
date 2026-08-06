@@ -64,6 +64,31 @@ export type DeviceLifecyclePhase =
   | 'degraded'
   | 'evicting'
 
+export type SIMSecurityStatus =
+  | 'ready'
+  | 'pin_required'
+  | 'puk_required'
+  | 'blocked'
+  | 'absent'
+  | 'network_locked'
+  | 'initializing'
+  | 'unavailable'
+  | 'unsupported'
+
+export type SIMSecurityState = {
+  status: SIMSecurityStatus
+  pin_kind?: 'pin1' | 'upin'
+  pin_required: boolean
+  puk_required: boolean
+  blocked: boolean
+  uses_upin: boolean
+  pin_retries?: number
+  puk_retries?: number
+  can_verify_pin: boolean
+  backend: string
+  updated_at?: string
+}
+
 export type DeviceOverviewItem = {
   id: string
   name: string

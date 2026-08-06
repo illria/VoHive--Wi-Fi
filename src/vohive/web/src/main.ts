@@ -6,6 +6,7 @@ import { debugCollector } from './debug/collector'
 import 'element-plus/dist/index.css'
 // Element Plus: 暗色主题变量（全局需要）
 import 'element-plus/theme-chalk/dark/css-vars.css'
+import './styles/tokens.css'
 import './style.css'
 import { ElLoading } from 'element-plus'
 

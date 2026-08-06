@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# VoHive portable installer
+# VoHive Linux installer
 # Author: Eianun | X: @Eianunbits
 AUTHOR_NAME="Eianun"
 AUTHOR_X="@Eianunbits"
@@ -15,7 +15,7 @@ banner() {
 }
 
 REPO="${VOHIVE_REPO:-illria/VoHive--Wi-Fi}"
-RELEASE_TAG="${VOHIVE_VERSION:-portable}"
+RELEASE_TAG="${VOHIVE_VERSION:-}"
 ROOT="${VOHIVE_INSTALL_ROOT:-/opt/vohive}"
 BIN_DIR="$ROOT/bin"
 CFG_DIR="$ROOT/config"
@@ -69,12 +69,23 @@ sha256_check() {
   fi
 }
 
-validate_version() {
+resolve_release_tag() {
+  if [ -z "$RELEASE_TAG" ]; then
+    if command -v curl >/dev/null 2>&1; then
+      RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" || die "无法读取 GitHub 最新 Release"
+    elif command -v wget >/dev/null 2>&1; then
+      RELEASE_JSON="$(wget -q -O - "https://api.github.com/repos/$REPO/releases/latest")" || die "无法读取 GitHub 最新 Release"
+    else
+      die "缺少 curl 或 wget，无法读取 GitHub 最新 Release"
+    fi
+    RELEASE_TAG="$(printf '%s\n' "$RELEASE_JSON" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+  fi
   case "$RELEASE_TAG" in
-    ''|*[!A-Za-z0-9._-]*)
-      log "警告: VOHIVE_VERSION="$RELEASE_TAG" 不是合法发布版本，已回退到 portable"
-      RELEASE_TAG=portable
-      ;;
+    [0-9]*) RELEASE_TAG="v$RELEASE_TAG" ;;
+  esac
+  case "$RELEASE_TAG" in
+    v[0-9]*.[0-9]*.[0-9]*) ;;
+    *) die "VOHIVE_VERSION 必须是 SemVer（例如 v1.2.3），当前值: $RELEASE_TAG" ;;
   esac
 }
 
@@ -156,7 +167,7 @@ main() {
     esac
   done
 
-  validate_version
+  resolve_release_tag
   detect_platform
   TMP="$(mktemp -d)"
 

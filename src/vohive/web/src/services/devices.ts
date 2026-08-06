@@ -1,6 +1,6 @@
 import { api } from '../stores/auth'
 import { callService } from './http'
-import type { CarrierWebsheetInfo, DeviceConfigDTO, DiscoveredDevice, EsimNotificationItem, EsimOverviewResponse, EsimSpaceDelta } from '../types/api'
+import type { CarrierWebsheetInfo, DeviceConfigDTO, DiscoveredDevice, EsimNotificationItem, EsimOverviewResponse, EsimSpaceDelta, SIMSecurityState } from '../types/api'
 import type { DeviceDetailVM, DeviceListVM } from '../types/view-model'
 import axios from 'axios'
 
@@ -50,6 +50,12 @@ type UssdResult = {
 type UssdResponse = {
   result?: UssdResult
   channel?: string
+}
+
+type SIMPINVerifyResponse = {
+  ok?: boolean
+  message?: string
+  security?: SIMSecurityState
 }
 
 const ESIM_BUSY_CODE = 'ESIM_BUSY'
@@ -114,6 +120,25 @@ export const devicesService = {
     return callService(async () => {
       const res = await api.get(`/devices/${id}/overview`, { signal })
       return ((res.data?.devices || [])[0] || null) as DeviceDetailVM | null
+    })
+  },
+  getSIMSecurity(id: string, signal?: AbortSignal) {
+    return callService(async () => {
+      const res = await api.get<SIMSecurityState>(`/devices/${id}/sim/security`, { signal })
+      return res.data
+    })
+  },
+  verifySIMPIN(id: string, pin: string) {
+    // This POST is intentionally direct: SIM PIN verification must never use
+    // the eSIM busy retry helper or automatically repeat a PIN attempt.
+    return callService(async () => {
+      const res = await api.post<SIMPINVerifyResponse>(`/devices/${id}/sim/actions/verify-pin`, { pin }, {
+        timeout: 15000
+      })
+      return {
+        security: res.data?.security as SIMSecurityState,
+        message: typeof res.data?.message === 'string' ? res.data.message : ''
+      }
     })
   },
   getConfig(id: string) {

@@ -17,6 +17,7 @@ import {
 const DEFAULT_SYSTEM_INFO: SystemInfo = {
   version: '',
   build_time: '',
+  commit: '',
   config: '',
   docs: {
     swagger_ui: '',

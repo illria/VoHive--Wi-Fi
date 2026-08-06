@@ -23,6 +23,7 @@ import (
 	"github.com/iniwex5/vohive/internal/proxy/traffic"
 	"github.com/iniwex5/vohive/internal/sipgw"
 	"github.com/iniwex5/vohive/internal/upstreamproxy"
+	"github.com/iniwex5/vohive/internal/updater"
 	"github.com/iniwex5/vowifi-go/runtimehost/carrier"
 	"github.com/iniwex5/vowifi-go/runtimehost/voicehost"
 
@@ -376,6 +377,7 @@ func main() {
 	}()
 
 	logger.Info("所有服务已启动")
+	updater.MarkStartupHealthy()
 
 	quit := make(chan os.Signal, 2)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

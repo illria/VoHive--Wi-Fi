@@ -226,7 +226,6 @@ func (s *Server) newRouter() *gin.Engine {
 	api.POST("/auth/login", s.handleLogin)
 	api.POST("/rotateip", s.handleRotate)
 	api.OPTIONS("/logs/stream", s.handleLogStreamOptions)
-	api.POST("/system/uninstall", s.handleUninstall)
 	s.registerWebsheetRoutes(api)
 
 	// 以下接口需要鉴权
@@ -259,6 +258,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.GET("/system/info", s.handleSystemInfo)            // 获取系统运行与版本信息
 		api.GET("/system/update/check", s.handleCheckUpdate)   // 检查系统更新
 		api.POST("/system/update/apply", s.handleApplyUpdate)  // 应用系统更新
+		api.GET("/system/update/status", s.handleUpdateStatus) // 轮询更新状态
 
 		api.GET("/devices", s.handleDeviceMgmtList)                                            // 获取设备列表（管理页用）
 		api.POST("/devices", s.handleDeviceMgmtAddDevice)                                      // 添加新设备
@@ -266,10 +266,12 @@ func (s *Server) newRouter() *gin.Engine {
 		api.POST("/devices/actions/rescan", s.handleDeviceRescan)                              // 手动触发设备重扫描
 		api.GET("/devices/:device_id/overview/stream", s.handleDeviceMgmtOverviewStreamSingle) // SSE 单体深层实时流
 		api.GET("/devices/:device_id/overview", s.handleDeviceMgmtOverviewLite)                // 获取设备详情（轻量版）
+		api.GET("/devices/:device_id/sim/security", s.handleGetSIMSecurity)                     // 获取 SIM PIN/PUK 安全状态
 		api.GET("/devices/:device_id/config", s.handleDeviceMgmtGetDeviceConfig)               // 获取设备配置
 		api.PUT("/devices/:device_id", s.handleDeviceMgmtUpdateDevice)                         // 更新设备配置
 		api.DELETE("/devices/:device_id", s.handleDeviceMgmtDeleteDevice)                      // 删除设备
 		api.POST("/devices/:device_id/actions/refresh", s.handleDeviceMgmtRefreshInfo)         // 手动触发刷新设备缓存信息
+		api.POST("/devices/:device_id/sim/actions/verify-pin", s.handleVerifySIMPIN)            // 单次验证 SIM PIN
 		api.POST("/devices/:device_id/actions/reboot", s.handleDeviceMgmtReboot)               // 重启设备模组
 		api.POST("/devices/:device_id/actions/at", s.handleDeviceMgmtExecuteAT)                // 执行 AT 命令
 		api.POST("/devices/:device_id/actions/ussd", s.handleDeviceMgmtExecuteUSSD)            // 执行 USSD 指令
@@ -2208,6 +2210,7 @@ func (s *Server) handleSystemInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"version":    global.Version,
 		"build_time": global.BuildTime,
+		"commit":     global.Commit,
 		"config":     viper.ConfigFileUsed(),
 		"docs":       currentAPIDocsLinks(),
 	})

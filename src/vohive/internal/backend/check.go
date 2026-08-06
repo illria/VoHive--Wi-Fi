@@ -6,4 +6,5 @@ var (
 	_ DeviceBackend = (*QMIBackend)(nil)
 	_ USSDProvider  = (*ATBackend)(nil)
 	_ USSDProvider  = (*QMIBackend)(nil)
+	_ SIMSecurityProvider = (*QMIBackend)(nil)
 )
