@@ -1,68 +1,54 @@
-# VoHive Linux 多架构构建与安装
+# VoHive
 
-本项目面向 Linux 设备提供 VoHive 的多架构构建产物、校验文件和自动化安装程序。项目通过 GitHub Actions 在云端完成交叉编译，不依赖本地构建环境。
+VoHive 是面向 Linux 随身 Wi‑Fi、Qualcomm 模组和 VoWiFi 场景的设备管理后台。仓库保留现有 QMI、SIM、短信、VoWiFi 和设备管理能力；本项目的更新器与发布流程从本仓库自身读取版本和 Release。
 
-## 项目能力
+## 支持平台
 
-- 支持 amd64、arm64（aarch64）和 armv7 架构
-- 根据当前 CPU 架构自动选择对应安装包
-- 支持 Debian、Ubuntu、Alpine、OpenWrt 等常见 Linux 环境
-- 自动校验下载文件 SHA-256
-- 支持 systemd 服务注册与开机启动
-- 默认安装目录：`/opt/vohive`
-- 默认 Web 端口：`7575`
-- 初始账号密码：`admin/admin`
+- Linux amd64
+- Linux arm64 / aarch64
+- Linux armv7
+
+实际可用性还取决于 Linux 内核、root 权限、USB/QMI 驱动、模组固件和 systemd 环境。
 
 ## 一键安装
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install-portable.sh | sh
+curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install.sh | sh
 ```
 
-安装器会自动识别系统发行版、CPU 架构和服务管理方式。你的 aarch64 设备对应使用 arm64 构建产物。
+安装器会读取 `illria/VoHive--Wi-Fi` 的最新稳定 SemVer Release，按 CPU 架构下载归档并校验 SHA-256。也可以显式指定版本：
 
-## 构建与发布
-
-构建流程由 GitHub Actions 执行，当前发布包位于：
-
-[Portable Releases](https://github.com/illria/VoHive--Wi-Fi/releases/tag/portable)
-
-构建目标：
-
-- `vohive_portable_linux_amd64.tar.gz`
-- `vohive_portable_linux_arm64.tar.gz`
-- `vohive_portable_linux_armv7.tar.gz`
-
-每个构建包均提供对应的 SHA-256 校验文件。
-
-## 源码来源
-
-Actions 使用固定版本的 VoHive 社区源码快照：
-
-```
-hzlmy2002/vohive-collection
-commit: 0c3052c524865a92d546f8fea12d873214c5f8e3
+```sh
+curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install.sh | VOHIVE_VERSION=v1.2.3 sh
 ```
 
-构建过程不使用本机环境，也不使用 x86-64 离线备份二进制。
+默认安装目录是 `/opt/vohive`，默认 Web 端口是 `7575`。安装器只在首次安装时创建示例配置；升级时保留已有配置和数据目录。
 
-## 兼容性说明
+## GitHub Actions 构建与发布
 
-本项目提供的是经过多架构交叉编译的 Linux 原生程序，不承诺对所有 Linux 发行版和硬件环境绝对兼容。实际运行还取决于：
+`.github/workflows/ci.yml` 在 Pull Request、`main` 推送和手动运行时执行前端 lint/typecheck/build、Go 测试，并为 amd64、arm64、armv7 生成可下载的测试二进制 artifact。
 
-- Linux 内核及系统调用支持
-- root 权限或 sudo 权限
-- USB、QMI 和 Qualcomm 4G/5G 模组支持
-- systemd 或其他服务管理环境
-- 可用磁盘空间和内存
+`.github/workflows/release.yml` 只接受 `vX.Y.Z` 或带预发布标识的 SemVer 标签，例如 `v1.2.3`、`v1.2.3-rc.1`。每个正式 Release 包含：
 
-资源受限设备建议使用原生二进制，不建议使用 Docker。
+- `vohive_vX.Y.Z_linux_amd64`
+- `vohive_vX.Y.Z_linux_arm64`
+- `vohive_vX.Y.Z_linux_armv7`
+- 对应裸二进制的 `.sha256`
+- 包含二进制和安装器的 `.tar.gz` 及校验文件
+- `manifest.json` 及其校验文件
 
-## 作者
+发布流程使用 `CGO_ENABLED=0` 交叉编译，不会把构建产物自动提交回 `main`。
 
-Eianun  
-X：[@Eianunbits](https://x.com/Eianunbits)
+## 在线更新
 
-## 许可说明
+登录后可在“系统设置”中检查稳定 Release、阅读 Release Note，并确认更新。服务端会按当前架构选择精确资产，下载后验证 SHA-256，再备份并原子替换运行文件；前端通过状态接口轮询下载、校验、替换、重启和回滚状态。
 
-源码快照的许可为 PolyForm Noncommercial 1.0.0，仅限非商业用途。使用前请确认相关源码、依赖和二进制发布许可。
+在线更新不会删除 `/opt/vohive/config/config.yaml`、`/opt/vohive/data`、用户账号、通知配置、APN、短信数据或设备配置。Docker 环境不执行运行中二进制替换，应由容器部署流程更新镜像。
+
+## 社区
+
+[Telegram 社区](https://t.me/eianunkeji)
+
+## 许可
+
+使用前请确认源码、依赖和设备固件的相应许可与合规要求。
