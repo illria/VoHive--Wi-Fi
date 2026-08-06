@@ -249,11 +249,86 @@ watch(() => emailForm.value.smtp_port, (newPort) => {
 
 
 
-import { systemService, type UpdateInfo } from '../services/system'
+import { systemService, type UpdateInfo, type UpdateStatus } from '../services/system'
 
 const checkingUpdate = ref(false)
 const applyingUpdate = ref(false)
 const updateInfo = ref<UpdateInfo | null>(null)
+const updateStatus = ref<UpdateStatus | null>(null)
+let updatePollTimer: number | undefined
+let updatePollStartedAt = 0
+let updatePollInFlight = false
+
+const updateStateLabels: Record<string, string> = {
+  idle: '未开始',
+  checking: '检查更新',
+  available: '发现更新',
+  downloading: '下载中',
+  verifying: '校验中',
+  backing_up: '备份中',
+  applying: '替换中',
+  restarting: '等待重启',
+  success: '已完成',
+  failed: '失败',
+  rolled_back: '已回滚'
+}
+
+function updateStateLabel(state: string) {
+  return updateStateLabels[state] || state
+}
+
+function stopUpdatePolling() {
+  if (updatePollTimer !== undefined) {
+    window.clearInterval(updatePollTimer)
+    updatePollTimer = undefined
+  }
+}
+
+function isTerminalUpdateState(state: string) {
+  return state === 'success' || state === 'failed' || state === 'rolled_back'
+}
+
+async function pollUpdateStatus(showResult = true) {
+  if (updatePollInFlight) return
+  updatePollInFlight = true
+  try {
+    const res = await systemService.getUpdateStatus()
+    if (!res.ok) return
+    updateStatus.value = res.data
+    if (isTerminalUpdateState(res.data.state)) {
+      stopUpdatePolling()
+      if (res.data.state === 'success') {
+        await loadSystemInfo()
+        if (showResult) ElMessage.success('更新完成，服务已恢复')
+      } else if (showResult) {
+        ElMessage.error(res.data.error || (res.data.state === 'rolled_back' ? '更新失败，已自动回滚' : '更新失败'))
+      }
+    } else if (Date.now() - updatePollStartedAt > 5 * 60 * 1000) {
+      stopUpdatePolling()
+      if (showResult) ElMessage.warning('更新状态轮询超时，请稍后查看系统信息')
+    }
+  } finally {
+    updatePollInFlight = false
+  }
+}
+
+function startUpdatePolling() {
+  stopUpdatePolling()
+  updatePollStartedAt = Date.now()
+  void pollUpdateStatus(false)
+  updatePollTimer = window.setInterval(() => {
+    void pollUpdateStatus()
+  }, 1500)
+}
+
+async function loadUpdateStatus() {
+  const res = await systemService.getUpdateStatus()
+  if (!res.ok || res.data.state === 'idle') return
+  updateStatus.value = res.data
+  if (!isTerminalUpdateState(res.data.state)) {
+    startUpdatePolling()
+  }
+}
 
 async function doCheckUpdate() {
   checkingUpdate.value = true
@@ -275,27 +350,28 @@ async function doApplyUpdate() {
   if (!updateInfo.value) return
 
   if (updateInfo.value.is_docker) {
-    ElMessageBox.alert(
-      '检测到当前系统运行在 Docker 环境下。<br><br>不建议在 Docker 容器内直接执行文件热替换。请直接通过拉取最新镜像（如 <code>docker pull iniwex5/vohive:latest</code>）并重启容器来完成升级！',
-      '环境警告',
-      { dangerouslyUseHTMLString: true, type: 'warning' }
-    )
+    ElMessageBox.alert('当前运行在 Docker 环境中，不能直接替换容器内的运行文件。请按照你的容器部署流程更新镜像并重启容器。', '环境提示', { type: 'warning' })
+    return
+  }
+
+  if (!updateInfo.value.supported) {
+    ElMessage.warning('当前平台没有对应的 Release 二进制，无法在线更新')
     return
   }
 
   try {
+    const releaseNote = updateInfo.value.release_note?.trim() || '暂无更新说明'
     await ElMessageBox.confirm(
-      `最新版本：${updateInfo.value.latest_version}，确定要现在更新并重启服务吗？<br><br><pre style="white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow-y: auto; background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; margin-top: 8px;">${updateInfo.value.release_note}</pre>`,
+      `最新版本：${updateInfo.value.latest_version}\n\n更新说明：\n${releaseNote}\n\n更新会替换当前程序并重启服务，配置、设备和数据目录不会被删除。`,
       '应用更新',
-      { dangerouslyUseHTMLString: true, confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
+      { confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
     )
     applyingUpdate.value = true
     const res = await systemService.applyUpdate()
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
-    ElMessage.success(res.data?.message || '正在更新...')
-    setTimeout(() => {
-      window.location.reload()
-    }, 5000)
+    updateStatus.value = res.data
+    ElMessage.success('更新任务已开始，请等待服务重启')
+    startUpdatePolling()
   } catch (e: any) {
     if (e !== 'cancel') {
       ElMessage.error(e.message || '应用更新失败')
@@ -308,9 +384,11 @@ async function doApplyUpdate() {
 onMounted(() => {
   loadNotifications()
   loadSystemInfo()
+  loadUpdateStatus()
 })
 
 onBeforeUnmount(() => {
+  stopUpdatePolling()
 })
 </script>
 
@@ -377,7 +455,7 @@ onBeforeUnmount(() => {
                   <el-button size="small" type="primary" class="!border-0" :loading="checkingUpdate" @click.stop="doCheckUpdate">
                     检查更新
                   </el-button>
-                  <span>{{ systemInfo.version || 'Unknown' }}</span>
+                  <span>{{ systemInfo.version || '未注入版本' }}</span>
                 </div>
               </FieldRow>
             </div>
@@ -389,12 +467,29 @@ onBeforeUnmount(() => {
                <div class="text-xs text-amber-700 dark:text-amber-300/80 mb-4 whitespace-pre-wrap max-h-32 overflow-y-auto pr-2 custom-scrollbar">
                  {{ updateInfo.release_note || '暂无更新说明' }}
                </div>
-               <el-button type="warning" :loading="applyingUpdate" @click="doApplyUpdate" class="w-full !border-0">
+               <div v-if="updateInfo.migration_required" class="text-xs text-amber-700 dark:text-amber-300 mb-3">
+                 当前构建未使用正式版本号，将按迁移更新处理。
+               </div>
+               <div v-if="!updateInfo.supported" class="text-xs text-amber-700 dark:text-amber-300 mb-3">
+                 当前平台没有可用的 Release 二进制。
+               </div>
+               <el-button type="warning" :loading="applyingUpdate || !!updateStatus && !isTerminalUpdateState(updateStatus.state)" :disabled="!updateInfo.supported" @click="doApplyUpdate" class="w-full !border-0">
                  立即更新并重启
                </el-button>
             </div>
+            <div v-if="updateStatus && updateStatus.state !== 'idle'" class="p-4 bg-gray-50 dark:bg-white/5 rounded-lg border border-gray-200 dark:border-white/10">
+              <div class="flex items-center justify-between gap-3 text-sm font-semibold text-gray-800 dark:text-gray-100">
+                <span>更新状态：{{ updateStateLabel(updateStatus.state) }}</span>
+                <span class="font-mono text-xs text-gray-500">{{ updateStatus.progress }}%</span>
+              </div>
+              <el-progress class="mt-3" :percentage="Math.max(0, Math.min(100, updateStatus.progress))" :status="updateStatus.state === 'success' ? 'success' : updateStatus.state === 'failed' || updateStatus.state === 'rolled_back' ? 'exception' : undefined" />
+              <div class="mt-2 text-xs text-gray-500 whitespace-pre-wrap">{{ updateStatus.message || updateStatus.error }}</div>
+            </div>
             <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
               <FieldRow label="构建时间" :value="systemInfo.build_time" monospace />
+            </div>
+            <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
+              <FieldRow label="构建提交" :value="systemInfo.commit" monospace />
             </div>
             <div class="p-3 bg-gray-50 dark:bg-white/5 rounded-lg">
               <FieldRow label="配置路径" :value="systemInfo.config" monospace copyable />
