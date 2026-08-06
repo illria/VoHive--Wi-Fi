@@ -700,6 +700,9 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 			case <-worker.stop:
 				return
 			case <-ticker.C:
+				if worker.gateNonEssentialQMIWork() {
+					continue
+				}
 				switch worker.smsMode {
 				case smsModeAT:
 				case smsModeQMI:

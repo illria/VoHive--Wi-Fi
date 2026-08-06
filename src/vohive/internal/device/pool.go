@@ -114,6 +114,17 @@ type Worker struct {
 	stop             chan struct{}
 	stopOnce         sync.Once
 
+	// 启动期 QMI SIM 清理只允许在一个 Worker 生命周期内进入一次；
+	// UIM reset 另有独立的一次性闸门，防止 QMI core 重试再次触发 reset。
+	startupSIMCleanupStarted atomic.Bool
+	startupUIMResetAttempted atomic.Bool
+
+	identityRetryMu      sync.Mutex
+	identityRetryRunning bool
+
+	nonEssentialPollMu          sync.Mutex
+	nonEssentialPollPauseReason string
+
 	cachedIP            string
 	cachedPublicIPv6    string
 	cacheTime           time.Time
@@ -1176,6 +1187,9 @@ func (p *Pool) applyNetworkPreference(worker *Worker) error {
 	if worker == nil {
 		return fmt.Errorf("worker 不存在")
 	}
+	if worker.gateNonEssentialQMIWork() {
+		return fmt.Errorf("qmi_nonessential_work_paused")
+	}
 	nc := worker.NetworkController()
 	if nc == nil {
 		if worker.Config.NetworkEnabled {
@@ -1767,6 +1781,9 @@ func (p *Pool) startAllSynchronousLegacy() error {
 				case <-worker.stop:
 					return
 				case <-ticker.C:
+					if worker.gateNonEssentialQMIWork() {
+						continue
+					}
 					switch worker.smsMode {
 					case smsModeAT:
 						// AT 模式：完全依赖 URC，不轮询

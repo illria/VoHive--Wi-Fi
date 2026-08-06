@@ -88,7 +88,71 @@ func TestConvergeQMIIdentityEscalatesOnTimeout(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(escalations) != 1 || escalations[0] != "convergence_timeout" {
-		t.Fatalf("expected one convergence_timeout escalation, got %v", escalations)
+	if len(escalations) != 0 {
+		t.Fatalf("identity-only timeout must not escalate to Worker rebuild, got %v", escalations)
+	}
+}
+
+func TestQMIIdentityRetryDelayUsesTenThirtySixtyBackoff(t *testing.T) {
+	orig := qmiIdentityRetryDelays
+	defer func() { qmiIdentityRetryDelays = orig }()
+	qmiIdentityRetryDelays = []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
+
+	for _, tc := range []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 0, want: 10 * time.Second},
+		{attempt: 1, want: 30 * time.Second},
+		{attempt: 2, want: 60 * time.Second},
+		{attempt: 3, want: 60 * time.Second},
+	} {
+		if got := qmiIdentityRetryDelay(tc.attempt); got != tc.want {
+			t.Fatalf("qmiIdentityRetryDelay(%d) = %s, want %s", tc.attempt, got, tc.want)
+		}
+	}
+}
+
+func TestQMIIdentityConvergenceAllowsOnlyOneBackgroundRetryTask(t *testing.T) {
+	origDelays := qmiIdentityRetryDelays
+	defer func() { qmiIdentityRetryDelays = origDelays }()
+	qmiIdentityRetryDelays = []time.Duration{time.Hour}
+
+	p := NewPool(&config.Config{})
+	w := &Worker{ID: "dev-1", Pool: p, stop: make(chan struct{})}
+	p.mu.Lock()
+	p.workers[w.ID] = w
+	p.mu.Unlock()
+
+	p.startQMIIdentityConvergence(w, "test")
+	p.startQMIIdentityConvergence(w, "duplicate")
+	w.identityRetryMu.Lock()
+	running := w.identityRetryRunning
+	w.identityRetryMu.Unlock()
+	if !running {
+		t.Fatal("expected one background identity retry task to be running")
+	}
+
+	close(w.stop)
+	p.cancel()
+}
+
+func TestNonEssentialQMIWorkGatePausesIdentityPendingAndRecovery(t *testing.T) {
+	w := &Worker{Config: config.DeviceConfig{DeviceBackend: "qmi"}}
+	if paused, reason := w.qmiNonEssentialWorkPaused(); !paused || reason != "identity_pending" {
+		t.Fatalf("initial QMI gate = paused:%v reason:%q, want identity_pending pause", paused, reason)
+	}
+
+	w.cacheMu.Lock()
+	w.state.Identity.Ready = true
+	w.state.Identity.Phase = simIdentityPhaseReady
+	w.cacheMu.Unlock()
+	if paused, reason := w.qmiNonEssentialWorkPaused(); paused || reason != "" {
+		t.Fatalf("ready QMI gate = paused:%v reason:%q, want open", paused, reason)
+	}
+
+	w.RecordWatchdogEvent(WatchdogEvent{Layer: HealthLayerQMI, State: HealthStateRecovering, Reason: "transport_recovery"})
+	if paused, reason := w.qmiNonEssentialWorkPaused(); !paused || reason != "qmi_recovery" {
+		t.Fatalf("recovering QMI gate = paused:%v reason:%q, want qmi_recovery pause", paused, reason)
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 var qmiControlStatFn = os.Stat
-var qmiRecoveryControlStableInterval = 1200 * time.Millisecond
+var qmiRecoveryControlStableInterval = 3 * time.Second
 
 func workerATProbeOK(w *Worker, timeout time.Duration) bool {
 	if w != nil {
@@ -304,16 +304,11 @@ func modemRebootRecoveryShouldRebuildAfterReadinessFailure(opts modemRebootRecov
 	if reason != "manual_reboot" && !opts.removeBeforeScan {
 		return false
 	}
-	message := strings.ToLower(err.Error())
-	for _, fragment := range []string{
-		"live_identity_empty",
-		"sim_identity_empty",
-		"refresh_identity:",
-		"refresh_runtime:",
-	} {
-		if strings.Contains(message, fragment) {
-			return true
-		}
+	if qmiErrorIndicatesIdentityPending(err.Error()) {
+		return false
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "refresh_runtime:") && qmiErrorIndicatesTransportDown(err.Error()) {
+		return true
 	}
 	return false
 }
@@ -328,6 +323,9 @@ func qmiWorkerControlReady(worker *Worker) bool {
 
 func modemRebootRecoveryShouldRebuildAfterReadinessFailureForWorker(opts modemRebootRecoveryOptions, worker *Worker, err error) bool {
 	if err == nil {
+		return false
+	}
+	if qmiErrorIndicatesIdentityPending(err.Error()) {
 		return false
 	}
 	if qmiWorkerControlReady(worker) {
@@ -581,8 +579,8 @@ func (p *Pool) runModemRebootRecovery(opts modemRebootRecoveryOptions) {
 							"round", round+1,
 							"err", removeErr)
 					}
-				} else if controlReadyBeforeIdentityRefresh {
-					logger.Info("模组重启恢复：QMI 控制面已恢复，SIM 身份转入后台收敛",
+				} else if qmiErrorIndicatesIdentityPending(err.Error()) || controlReadyBeforeIdentityRefresh {
+					logger.Info("模组重启恢复：未检测到传输断开，SIM 身份转入后台收敛",
 						"device", opts.deviceID,
 						"round", round+1,
 						"reason", opts.reason,

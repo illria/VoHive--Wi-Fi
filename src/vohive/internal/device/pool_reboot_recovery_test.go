@@ -228,7 +228,7 @@ func TestModemRebootRecoveryMarkerDoesNotBlockWorkerRebuild(t *testing.T) {
 	}
 }
 
-func TestManualModemRebootRecoveryEvictsHalfReadyWorkerAfterIdentityFailure(t *testing.T) {
+func TestManualModemRebootRecoveryKeepsWorkerAfterIdentityFailure(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte("devices: []\n"), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -242,6 +242,7 @@ func TestManualModemRebootRecoveryEvictsHalfReadyWorkerAfterIdentityFailure(t *t
 	t.Cleanup(func() { discoverQMIDevicesFn = origDiscover })
 
 	p := NewPool(&config.Config{})
+	defer p.cancel()
 	be := &workerStartupIdentityBackendStub{}
 	be.workerPhoneBackendStub.workerStatusBackendStub.mode = backend.BackendQMI
 	be.workerPhoneBackendStub.workerStatusBackendStub.opMode = backend.ModeOnline
@@ -266,8 +267,8 @@ func TestManualModemRebootRecoveryEvictsHalfReadyWorkerAfterIdentityFailure(t *t
 		restoreVoWiFi:    false,
 	})
 
-	if got := p.GetWorker(w.ID); got != nil {
-		t.Fatal("manual reboot recovery left half-ready worker in pool after live_identity_empty")
+	if got := p.GetWorker(w.ID); got == nil {
+		t.Fatal("identity-only failure must keep the current worker for background convergence")
 	}
 }
 
