@@ -53,7 +53,9 @@ const statusLabels: Record<SIMSecurityStatus, string> = {
   unsupported: '不支持'
 }
 
-const statusTone: Record<SIMSecurityStatus, string> = {
+type StatusTagType = 'success' | 'warning' | 'danger' | 'info'
+
+const statusTone: Record<SIMSecurityStatus, StatusTagType> = {
   ready: 'success',
   pin_required: 'warning',
   puk_required: 'danger',
@@ -188,7 +190,7 @@ function pinKindLabel(kind?: 'pin1' | 'upin') {
   return kind === 'upin' ? 'UPIN' : kind === 'pin1' ? 'PIN1' : '—'
 }
 
-function statusTagType(status?: SIMSecurityStatus) {
+function statusTagType(status?: SIMSecurityStatus): StatusTagType {
   return status ? statusTone[status] : 'info'
 }
 
