@@ -36,6 +36,7 @@ func TestAddWorkerQMIManagedRebindsByIMEIWhenControlDeviceGone(t *testing.T) {
 
 	// 初始化 Pool
 	p := NewPool(&config.Config{})
+	t.Cleanup(func() { _ = p.Shutdown() })
 
 	devCfg := config.DeviceConfig{
 		ID:             "dev-qmi-1",
@@ -47,14 +48,11 @@ func TestAddWorkerQMIManagedRebindsByIMEIWhenControlDeviceGone(t *testing.T) {
 		NetworkEnabled: true, // hasManagedQMINetwork 的条件
 	}
 
-	// 此时 /dev/nonexistent-control-old 不存在，controlDeviceStatErr != nil，
-	// 但发现流程应按 IMEI 取回新路径。Modem 管理器允许 QMI Core 异步等待
-	// 设备节点出现，所以这里应成功返回 Worker，而不是依赖底层构造函数报错。
-	defer p.cancel()
-	w, err := p.AddWorkerFromConfig(devCfg)
+	// 此时 /dev/nonexistent-control-old 不存在，controlDeviceStatErr != nil。
+	// 但 shouldDiscoverQMIManagedBootstrapByIMEI 会返回 true。
+	worker, err := p.AddWorkerFromConfig(devCfg)
 	require.NoError(t, err)
-	require.NotNil(t, w)
-	require.Equal(t, "/dev/cdc-wdm-new-qmi", w.Config.ControlDevice)
-	require.Equal(t, "wwan-new", w.Config.Interface)
-	require.NoError(t, p.RemoveWorker(devCfg.ID))
+	require.NotNil(t, worker)
+	require.Equal(t, "/dev/cdc-wdm-new-qmi", worker.Config.ControlDevice)
+	require.Equal(t, "wwan-new", worker.Config.Interface)
 }
