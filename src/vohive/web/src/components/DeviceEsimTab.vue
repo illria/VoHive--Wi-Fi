@@ -9,6 +9,7 @@ import { useSensitiveVisibility } from '../composables/useSensitiveVisibility'
 import { applyOptimisticActiveState } from './deviceEsimOptimistic'
 import { pickNextDownloadAid } from './deviceEsimOverviewRefresh'
 import { describeDeleteResultNotice, describeDownloadTerminalNotice, describeSpaceDelta } from './deviceEsimOperationNotice'
+import { parseEsimActivationCode } from '../utils/esimActivationCode'
 import {
   formatEsimNotificationEvent,
   notificationDialogWidth,
@@ -64,6 +65,10 @@ const downloadProgress = ref(0)
 const downloadMsg = ref('')
 const downloadError = ref('')
 const downloadSessionId = ref(0)
+const qrInput = ref<HTMLInputElement | null>(null)
+const qrScanning = ref(false)
+const qrScanError = ref('')
+const qrScanNote = ref('')
 const recentSpaceDelta = ref<{ aidHex: string; message: string } | null>(null)
 let recentSpaceDeltaTimer: number | null = null
 let lastDeviceImeiDefault = ''
@@ -80,21 +85,103 @@ function applyDeviceImeiDefault(force = false) {
   lastDeviceImeiDefault = next
 }
 
+type BarcodeDetection = { rawValue?: string }
+type BarcodeDetectorInstance = {
+  detect(source: unknown): Promise<BarcodeDetection[]>
+}
+type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorInstance
+
+function applyActivationCode(input: string, notify = false) {
+  const parsed = parseEsimActivationCode(input)
+  downloadForm.value.smdp = parsed.smdp
+  downloadForm.value.matchingId = parsed.matchingId
+  qrScanNote.value = parsed.optionalFields.length
+    ? '二维码含标准可选参数；确认码仍请按运营商提供的内容填写。'
+    : ''
+  if (notify) {
+    ElMessage.success('已识别二维码，请确认目标 eUICC 后开始下载')
+  }
+  return parsed
+}
+
 // 智能解析完整的 LPA 激活码或移除 URL 前缀
 watch(() => downloadForm.value.smdp, (newVal) => {
-  if (!newVal) return
+  const value = newVal.trim()
+  if (!value) return
 
-  if (newVal.startsWith('LPA:')) {
-    const parts = newVal.split('$')
-    if (parts.length >= 3) {
-      downloadForm.value.smdp = parts[1] // SM-DP+
-      downloadForm.value.matchingId = parts[2] // Matching ID
-      ElMessage.success('已自动解析完整的 LPA 激活码')
+  if (/^(?:LPA:)?1\$/i.test(value)) {
+    try {
+      applyActivationCode(value, true)
+    } catch {
+      // 输入尚未完成时不打断用户；点击上传二维码时会给出明确错误。
     }
-  } else if (newVal.startsWith('http://') || newVal.startsWith('https://')) {
-    downloadForm.value.smdp = newVal.replace(/^https?:\/\//i, '')
+  } else if (/^https?:\/\//i.test(value)) {
+    downloadForm.value.smdp = value.replace(/^https?:\/\//i, '')
   }
 })
+
+function barcodeDetectorConstructor(): BarcodeDetectorConstructor | null {
+  const candidate = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
+  return typeof candidate === 'function' ? candidate : null
+}
+
+async function detectQrPayload(file: File): Promise<string> {
+  const Detector = barcodeDetectorConstructor()
+  if (!Detector) {
+    throw new Error('当前浏览器不支持图片二维码识别，请使用 Chrome/Edge，或直接粘贴 LPA 激活码')
+  }
+
+  const detector = new Detector({ formats: ['qr_code'] })
+  if (typeof createImageBitmap === 'function') {
+    const bitmap = await createImageBitmap(file)
+    try {
+      const results = await detector.detect(bitmap)
+      return results.find((item) => item.rawValue?.trim())?.rawValue?.trim() || ''
+    } finally {
+      bitmap.close()
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error('无法读取二维码图片'))
+      element.src = objectUrl
+    })
+    const results = await detector.detect(image)
+    return results.find((item) => item.rawValue?.trim())?.rawValue?.trim() || ''
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+function openQrPicker() {
+  if (!qrScanning.value) qrInput.value?.click()
+}
+
+async function handleQrFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+
+  qrScanning.value = true
+  qrScanError.value = ''
+  qrScanNote.value = ''
+  try {
+    const payload = await detectQrPayload(file)
+    if (!payload) throw new Error('图片中没有识别到二维码')
+    applyActivationCode(payload)
+    ElMessage.success('已识别二维码，请确认目标 eUICC 后开始下载')
+  } catch (e: unknown) {
+    qrScanError.value = errorMessage(e, '二维码识别失败')
+    ElMessage.error(qrScanError.value)
+  } finally {
+    qrScanning.value = false
+  }
+}
 
 let fetchAbortController: AbortController | null = null
 let fetchOverviewRequestId = 0
@@ -709,11 +796,32 @@ onBeforeUnmount(() => {
 
       <!-- 下载新 Profile -->
       <div v-if="chipInfo" class="ui-panel-muted p-4">
-      <div class="flex items-center gap-2 mb-3">
-        <div class="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-          <el-icon size="16"><Add24Regular /></el-icon>
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+            <el-icon size="16"><Add24Regular /></el-icon>
+          </div>
+          <div>
+            <div class="text-sm font-bold text-gray-900 dark:text-white">下载新 Profile</div>
+            <div class="text-[11px] text-gray-400 dark:text-gray-500">上传 eSIM 二维码，自动读取 LPA 激活信息</div>
+          </div>
         </div>
-        <div class="text-sm font-bold text-gray-900 dark:text-white">下载新 Profile</div>
+        <div class="flex items-center gap-2">
+          <input
+            ref="qrInput"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            class="hidden"
+            @change="handleQrFileChange"
+          />
+          <el-button type="primary" plain :loading="qrScanning" :disabled="downloading" @click="openQrPicker">
+            <el-icon><Add24Regular /></el-icon>
+            上传二维码
+          </el-button>
+        </div>
+      </div>
+      <div v-if="qrScanError || qrScanNote" class="mb-3 rounded-lg border px-3 py-2 text-xs" :class="qrScanError ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300' : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'">
+        {{ qrScanError || qrScanNote }}
       </div>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div class="space-y-1">
