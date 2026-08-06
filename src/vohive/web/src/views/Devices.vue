@@ -10,6 +10,7 @@ import DeviceListPanel from '../components/DeviceListPanel.vue'
 import DeviceDetailLoading from '../components/DeviceDetailLoading.vue'
 import DeviceDetailHeader from '../components/DeviceDetailHeader.vue'
 import DeviceOverviewTab from '../components/DeviceOverviewTab.vue'
+import DeviceSIMSecurityPanel from '../components/DeviceSIMSecurityPanel.vue'
 import DeviceEsimTab from '../components/DeviceEsimTab.vue'
 import DeviceAtTab from '../components/DeviceAtTab.vue'
 import DeviceUssdTab from '../components/DeviceUssdTab.vue'
@@ -1269,6 +1270,14 @@ usePollingScheduler(async () => {
                   :traffic-minute-tx="rollingMinuteTx"
                   :e911-starting="e911Starting"
                   @setup-e911="openE911Websheet"
+                />
+                <DeviceSIMSecurityPanel
+                  :device-id="selectedDevice.id"
+                  :visible="activeTab === 'overview'"
+                  :control-online="isControlOnline(selectedDevice)"
+                  :lifecycle-phase="selectedDevice.lifecycle_phase"
+                  :backend-mode="selectedDevice.backend_mode"
+                  @refresh="refreshSelectedDetailOnly"
                 />
                 <TrafficAnalysisPanel
                   :analysis="deviceAnalysis"

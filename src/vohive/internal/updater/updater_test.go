@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -422,8 +421,7 @@ func TestRunUpdateDownloadsVerifiesReplacesAndSignals(t *testing.T) {
 	}
 	payload := bytesForTest(4096)
 	digest := sha256.Sum256(payload)
-	var signalMu sync.Mutex
-	signaled := false
+	signaled := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/illria/VoHive--Wi-Fi/releases/latest":
@@ -441,9 +439,10 @@ func TestRunUpdateDownloadsVerifiesReplacesAndSignals(t *testing.T) {
 	}))
 	defer server.Close()
 	manager := newTestManager(t, server.URL, nil, func(os.Signal) error {
-		signalMu.Lock()
-		signaled = true
-		signalMu.Unlock()
+		select {
+		case signaled <- struct{}{}:
+		default:
+		}
 		return nil
 	})
 	_, err := manager.StartUpdate()
@@ -467,10 +466,11 @@ func TestRunUpdateDownloadsVerifiesReplacesAndSignals(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	signalMu.Lock()
-	wasSignaled := signaled
-	signalMu.Unlock()
-	if !wasSignaled {
+	signalDeadline := time.NewTimer(3 * time.Second)
+	defer signalDeadline.Stop()
+	select {
+	case <-signaled:
+	case <-signalDeadline.C:
 		t.Fatal("update did not signal restart")
 	}
 }

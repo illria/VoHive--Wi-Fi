@@ -1264,6 +1264,23 @@ func (m *Manager) QMIState() qmimanager.State {
 	return m.qmiMgr.State()
 }
 
+// IsControlReady reports whether the QMI control plane is initialized. It is
+// deliberately independent of data-call state so a SIM waiting for PIN or
+// identity convergence remains actionable.
+func (m *Manager) IsControlReady() bool {
+	if m == nil || m.qmiMgr == nil {
+		return false
+	}
+	return m.qmiMgr.IsControlReady()
+}
+
+func (m *Manager) IsCoreReady() bool {
+	if m == nil || m.qmiMgr == nil {
+		return false
+	}
+	return m.qmiMgr.IsCoreReady()
+}
+
 func (m *Manager) SetAPDUArbiter(arbiter *apduarbiter.Arbiter) {
 	if m == nil {
 		return
@@ -1776,6 +1793,53 @@ func (m *Manager) GetSIMStatus(ctx context.Context) (qmi.SIMStatus, error) {
 		return qmi.SIMAbsent, fmt.Errorf("qmi_manager_not_available")
 	}
 	return m.qmiMgr.GetSIMStatus(ctx)
+}
+
+func (m *Manager) acquireSIMSecurityLease(ctx context.Context) (*apduarbiter.Lease, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	leaseCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	return m.acquireAPDUTransportLease(leaseCtx, 150*time.Millisecond, "sim_security", apduarbiter.APDUClassRecovery, 0, apduarbiter.TransportScopeExclusive)
+}
+
+// GetSIMSecurityState exposes the full UIM card status needed for PIN/PUK
+// state and retry counters. The APDU arbiter prevents overlap with eSIM UIM
+// operations on the same device.
+func (m *Manager) GetSIMSecurityState(ctx context.Context) (*qmi.CardStatusDetails, qmi.SIMStatus, error) {
+	if m == nil || m.qmiMgr == nil {
+		return nil, qmi.SIMNotReady, fmt.Errorf("qmi_uim_not_available")
+	}
+	lease, err := m.acquireSIMSecurityLease(ctx)
+	if err != nil {
+		return nil, qmi.SIMNotReady, err
+	}
+	if lease != nil {
+		defer lease.Release()
+		lease.Touch()
+	}
+	return m.qmiMgr.GetSIMSecurityState(ctx)
+}
+
+// VerifySIMPIN performs the QMI UIM status -> one VerifyPIN -> status flow.
+// It does not retry the PIN or initiate modem/worker recovery.
+func (m *Manager) VerifySIMPIN(ctx context.Context, pin string) (*qmi.CardStatusDetails, qmi.SIMStatus, error) {
+	if m == nil || m.qmiMgr == nil {
+		return nil, qmi.SIMNotReady, fmt.Errorf("qmi_uim_not_available")
+	}
+	lease, err := m.acquireSIMSecurityLease(ctx)
+	if err != nil {
+		return nil, qmi.SIMNotReady, err
+	}
+	if lease != nil {
+		defer lease.Release()
+		lease.Touch()
+	}
+	return m.qmiMgr.VerifySIMPIN(ctx, pin)
 }
 
 // GetServingSystem returns registration info
