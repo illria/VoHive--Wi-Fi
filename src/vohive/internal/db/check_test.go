@@ -14,10 +14,10 @@ func TestCheckSchema(t *testing.T) {
 		t.Fatal("Init() returned without setting DB")
 	}
 	var m []map[string]interface{}
-	if err := DB.Raw("PRAGMA table_info(managed_devices)").Scan(&m).Error; err != nil {
-		t.Fatalf("query managed_devices schema: %v", err)
+	if err := DB.Raw("PRAGMA table_info(devices)").Scan(&m).Error; err != nil {
+		t.Fatalf("query devices schema: %v", err)
 	}
 	if len(m) == 0 {
-		t.Fatal("managed_devices schema is empty")
+		t.Fatal("devices schema is empty")
 	}
 }
