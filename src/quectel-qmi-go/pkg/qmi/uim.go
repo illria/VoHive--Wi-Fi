@@ -67,6 +67,15 @@ const (
 	UIMSessionTypeLogicalChannelSlot3     uint8 = 22
 )
 
+// QMI UIM PIN identifiers. These values are the QMI UIM PIN ID enum values;
+// keep them centralized so callers do not pass PIN IDs as business-layer
+// magic numbers.
+const (
+	UIMPinIDPIN1 uint8 = 1
+	UIMPinIDPIN2 uint8 = 2
+	UIMPinIDUPIN uint8 = 3
+)
+
 const (
 	UIMFileTypeTransparent uint8 = 0
 	UIMFileTypeCyclic      uint8 = 1
