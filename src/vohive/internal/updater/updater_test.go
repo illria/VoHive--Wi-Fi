@@ -416,7 +416,7 @@ func TestRunUpdateDownloadsVerifiesReplacesAndSignals(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("release assets are Linux-only")
 	}
-	arch, supported := assetKey(runtime.GOOS, runtime.GOARCH, runtime.GOARM)
+	arch, supported := runtimeAssetKey()
 	if !supported {
 		t.Skip("test runner architecture is not a supported release target")
 	}
