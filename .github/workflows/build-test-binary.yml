@@ -1,0 +1,106 @@
+name: Build VoHive test binaries
+
+on:
+  push:
+    branches:
+      - "codex/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vohive-test-binary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact_arch }} test binary
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goarch: amd64, goarm: "", artifact_arch: amd64}
+          - {goarch: arm64, goarm: "", artifact_arch: arm64}
+          - {goarch: arm, goarm: "7", artifact_arch: armv7}
+
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: src/vohive/go.mod
+          cache: false
+
+      - name: Build frontend
+        working-directory: src/vohive
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          rm -rf internal/web/dist
+          mkdir -p internal/web
+          cp -R web/dist internal/web/dist
+
+      - name: Create local Go workspace
+        working-directory: src
+        run: |
+          cat > go.work <<'EOF'
+          go 1.26.3
+          use (
+            ./vohive
+            ./vowifi-go
+            ./swu-go
+            ./quectel-qmi-go
+            ./netlink
+            ./qqbot
+            ./euicc-go
+            ./uicc-go
+          )
+          EOF
+
+      - name: Run Linux device tests
+        if: matrix.artifact_arch == 'amd64'
+        working-directory: src/vohive
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux go test ./internal/device
+
+      - name: Build test binaries
+        working-directory: src/vohive
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" GOARM="$GOARM" \
+            go build -trimpath -buildvcs=false -tags "with_utls nomsgpack" \
+            -ldflags "-s -w -X github.com/iniwex5/vohive/internal/global.Version=test -X github.com/iniwex5/vohive/internal/global.BuildTime=${GITHUB_SHA}" \
+            -o "dist/vohive-test-${{ matrix.artifact_arch }}" ./cmd/vohive
+          CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" GOARM="$GOARM" \
+            go test ./internal/device -c -o "dist/vohive-device.test-${{ matrix.artifact_arch }}"
+
+      - name: Package test binaries
+        env:
+          ARCH: ${{ matrix.artifact_arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tar -czf "release/vohive_test_binaries_linux_$ARCH.tar.gz" -C src/vohive/dist \
+            "vohive-test-$ARCH" "vohive-device.test-$ARCH"
+          (cd release && sha256sum "vohive_test_binaries_linux_$ARCH.tar.gz" > "vohive_test_binaries_linux_$ARCH.tar.gz.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vohive-test-${{ matrix.artifact_arch }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14

@@ -151,6 +151,9 @@ func (p *Pool) enableVoWiFiWhenReady(deviceID string, timeout time.Duration, rea
 	if err := p.waitWorkerReady(deviceID, timeout); err != nil {
 		return fmt.Errorf("等待设备 %s 就绪失败(%s): %w", deviceID, reason, err)
 	}
+	if worker := p.GetWorker(deviceID); worker != nil && worker.gateNonEssentialQMIWork() {
+		return fmt.Errorf("设备 %s 仍处于 QMI 恢复或 SIM 身份收敛阶段", deviceID)
+	}
 	return p.EnableVoWiFi(deviceID)
 }
 

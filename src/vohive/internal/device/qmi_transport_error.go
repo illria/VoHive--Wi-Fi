@@ -19,11 +19,39 @@ func qmiErrorIndicatesTransportDown(message string) bool {
 	for _, fragment := range []string{
 		"broken pipe",
 		"read failed: eof",
+		"read: eof",
+		"unexpected eof",
 		"connection closed",
+		"connection reset",
 		"no such device",
 		"no such file or directory",
+		"device node missing",
+		"input/output error",
+		"i/o error",
 		"write failed",
 		"failed to open qmi device",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// qmiErrorIndicatesIdentityPending 判断错误是否只是 SIM 身份尚未收敛。
+// 该分类必须排除真正的传输断开，避免把控制面故障伪装成可等待的空身份。
+func qmiErrorIndicatesIdentityPending(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "" || qmiErrorIndicatesTransportDown(message) {
+		return false
+	}
+	for _, fragment := range []string{
+		"live_identity_empty",
+		"sim_identity_empty",
+		"identity not readable",
+		"identity_empty",
+		"uim identity empty",
+		"refresh_identity:",
 	} {
 		if strings.Contains(message, fragment) {
 			return true
