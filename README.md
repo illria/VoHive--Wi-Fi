@@ -39,6 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install.s
 
 发布流程使用 `CGO_ENABLED=0` 交叉编译，不会把构建产物自动提交回 `main`。
 
+SIM PIN Web 状态、PIN1/UPIN 映射、单次验证边界和手工验证清单见 [`docs/SIM_PIN_SECURITY.md`](docs/SIM_PIN_SECURITY.md)。
+
 ## 在线更新
 
 登录后可在“系统设置”中检查稳定 Release、阅读 Release Note，并确认更新。服务端会按当前架构选择精确资产，下载后验证 SHA-256，再备份并原子替换运行文件；前端通过状态接口轮询下载、校验、替换、重启和回滚状态。
