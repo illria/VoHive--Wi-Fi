@@ -429,7 +429,7 @@ func (m *Manager) runUpdate(proxyID string) {
 		return
 	}
 
-	downloadPath, proxy, err = m.downloadAndVerifyAssets(binaryAsset, checksumAsset, downloadDir, latestVersion, proxyID)
+	downloadPath, proxy, err := m.downloadAndVerifyAssets(binaryAsset, checksumAsset, downloadDir, latestVersion, proxyID)
 	if err != nil {
 		m.fail(err)
 		return
