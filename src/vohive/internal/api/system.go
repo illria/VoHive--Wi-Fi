@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -15,7 +17,7 @@ func writeUpdateError(c *gin.Context, err error) {
 	switch code {
 	case string(updater.ErrUpdateInProgress), string(updater.ErrDockerUnsupported), string(updater.ErrNoUpdate):
 		status = http.StatusConflict
-	case string(updater.ErrInvalidCurrentVersion), string(updater.ErrUnsupportedArchitecture):
+	case string(updater.ErrInvalidCurrentVersion), string(updater.ErrUnsupportedArchitecture), string(updater.ErrInvalidGitHubProxy):
 		status = http.StatusBadRequest
 	case string(updater.ErrGitHubUnreachable), string(updater.ErrReleaseNotFound):
 		status = http.StatusBadGateway
@@ -29,7 +31,7 @@ func writeUpdateError(c *gin.Context, err error) {
 
 // handleCheckUpdate 检查系统更新
 func (s *Server) handleCheckUpdate(c *gin.Context) {
-	info, err := updater.CheckUpdate()
+	info, err := updater.CheckUpdateWithProxy(c.Query("proxy_id"))
 	if err != nil {
 		logger.Error("检查系统更新失败", "err", err)
 		writeUpdateError(c, err)
@@ -38,9 +40,26 @@ func (s *Server) handleCheckUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, info)
 }
 
+// handleUpdateProxies returns the built-in GitHub endpoints without making a
+// network request, so the user can choose an entry even when GitHub is blocked.
+func (s *Server) handleUpdateProxies(c *gin.Context) {
+	c.JSON(http.StatusOK, updater.GitHubProxyOptions())
+}
+
 // handleApplyUpdate 应用系统更新
 func (s *Server) handleApplyUpdate(c *gin.Context) {
-	status, err := updater.StartUpdate()
+	var request struct {
+		ProxyID string `json:"proxy_id"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_request",
+			"code":    "invalid_request",
+			"message": "更新请求格式无效",
+		})
+		return
+	}
+	status, err := updater.StartUpdateWithProxy(request.ProxyID)
 	if err != nil {
 		logger.Error("应用更新失败", "err", err)
 		writeUpdateError(c, err)

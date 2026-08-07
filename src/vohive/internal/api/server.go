@@ -256,6 +256,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.POST("/settings/notifications/email/test", s.handleTestEmailNotification)
 		api.POST("/settings/password", s.handleChangePassword) // 修改登录密码
 		api.GET("/system/info", s.handleSystemInfo)            // 获取系统运行与版本信息
+		api.GET("/system/update/proxies", s.handleUpdateProxies) // 获取 GitHub 更新入口
 		api.GET("/system/update/check", s.handleCheckUpdate)   // 检查系统更新
 		api.POST("/system/update/apply", s.handleApplyUpdate)  // 应用系统更新
 		api.GET("/system/update/status", s.handleUpdateStatus) // 轮询更新状态

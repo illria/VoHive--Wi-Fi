@@ -599,6 +599,13 @@ paths:
     get:
       tags: [settings]
       summary: 检查系统更新
+      parameters:
+        - in: query
+          name: proxy_id
+          schema:
+            type: string
+            default: auto
+          description: GitHub 更新入口；auto 会依次尝试多个入口
       responses:
         '200':
           description: 更新检查结果
@@ -611,10 +618,30 @@ paths:
         '502':
           $ref: '#/components/responses/ErrorMessage'
 
+  /system/update/proxies:
+    get:
+      tags: [settings]
+      summary: 获取 GitHub 更新入口
+      responses:
+        '200':
+          description: 可用的内置更新入口
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UpdateProxyOption'
+
   /system/update/apply:
     post:
       tags: [settings]
       summary: 开始应用系统更新
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemUpdateApplyRequest'
       responses:
         '202':
           description: 更新任务已开始
@@ -1946,6 +1973,30 @@ components:
           type: boolean
         channel:
           type: string
+        proxy_id:
+          type: string
+        proxy_options:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateProxyOption'
+
+    UpdateProxyOption:
+      type: object
+      required: [id, name, description]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+
+    SystemUpdateApplyRequest:
+      type: object
+      properties:
+        proxy_id:
+          type: string
+          default: auto
 
     SystemUpdateStatus:
       type: object
@@ -1956,6 +2007,8 @@ components:
         current_version:
           type: string
         target_version:
+          type: string
+        proxy_id:
           type: string
         progress:
           type: integer

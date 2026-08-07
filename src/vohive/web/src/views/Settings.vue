@@ -249,15 +249,51 @@ watch(() => emailForm.value.smtp_port, (newPort) => {
 
 
 
-import { systemService, type UpdateInfo, type UpdateStatus } from '../services/system'
+import { systemService, type UpdateInfo, type UpdateProxyOption, type UpdateStatus } from '../services/system'
 
 const checkingUpdate = ref(false)
 const applyingUpdate = ref(false)
 const updateInfo = ref<UpdateInfo | null>(null)
 const updateStatus = ref<UpdateStatus | null>(null)
+const updateProxyOptions = ref<UpdateProxyOption[]>([])
 let updatePollTimer: number | undefined
 let updatePollStartedAt = 0
 let updatePollInFlight = false
+
+function readStoredUpdateProxy() {
+  if (typeof window === 'undefined') return 'auto'
+  try {
+    return window.localStorage.getItem('vohive.update_proxy') || 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+const selectedUpdateProxy = ref(readStoredUpdateProxy())
+
+function updateProxyLabel(proxyID?: string) {
+  const option = updateProxyOptions.value.find((item) => item.id === proxyID)
+  return option?.name || proxyID || '自动（推荐）'
+}
+
+function persistUpdateProxy(proxyID: string) {
+  selectedUpdateProxy.value = proxyID || 'auto'
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem('vohive.update_proxy', selectedUpdateProxy.value)
+  } catch {
+    // localStorage 受限时仍可继续使用当前页面选择。
+  }
+}
+
+async function loadUpdateProxies() {
+  const result = await systemService.getUpdateProxies()
+  if (!result.ok) return
+  updateProxyOptions.value = result.data
+  if (!result.data.some((item) => item.id === selectedUpdateProxy.value)) {
+    persistUpdateProxy('auto')
+  }
+}
 
 const updateStateLabels: Record<string, string> = {
   idle: '未开始',
@@ -333,9 +369,12 @@ async function loadUpdateStatus() {
 async function doCheckUpdate() {
   checkingUpdate.value = true
   try {
-    const res = await systemService.checkUpdate()
+    const res = await systemService.checkUpdate(selectedUpdateProxy.value)
     if (!res.ok) throw new Error(res.error.message || '检查更新失败')
     updateInfo.value = res.data
+    if (res.data.proxy_options?.length) {
+      updateProxyOptions.value = res.data.proxy_options
+    }
     if (!res.data.has_update) {
       ElMessage.success('当前已是最新版本')
     }
@@ -367,7 +406,7 @@ async function doApplyUpdate() {
       { confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
     )
     applyingUpdate.value = true
-    const res = await systemService.applyUpdate()
+    const res = await systemService.applyUpdate(selectedUpdateProxy.value)
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
     updateStatus.value = res.data
     ElMessage.success('更新任务已开始，请等待服务重启')
@@ -384,6 +423,7 @@ async function doApplyUpdate() {
 onMounted(() => {
   loadNotifications()
   loadSystemInfo()
+  loadUpdateProxies()
   loadUpdateStatus()
 })
 
@@ -458,6 +498,31 @@ onBeforeUnmount(() => {
                   <span>{{ systemInfo.version || '未注入版本' }}</span>
                 </div>
               </FieldRow>
+              <div class="mt-3 flex flex-col gap-2 border-t border-gray-200 pt-3 dark:border-white/10 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <div class="text-xs font-semibold text-gray-600 dark:text-gray-300">GitHub 更新入口</div>
+                  <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">自动模式会依次尝试加速代理，失败后回退直连</div>
+                </div>
+                <el-select
+                  class="w-full sm:w-72"
+                  size="small"
+                  :model-value="selectedUpdateProxy"
+                  :disabled="updateProxyOptions.length === 0"
+                  @update:model-value="persistUpdateProxy"
+                >
+                  <el-option
+                    v-for="option in updateProxyOptions"
+                    :key="option.id"
+                    :label="option.name"
+                    :value="option.id"
+                  >
+                    <div class="flex flex-col">
+                      <span>{{ option.name }}</span>
+                      <span class="text-[11px] text-gray-400">{{ option.description }}</span>
+                    </div>
+                  </el-option>
+                </el-select>
+              </div>
             </div>
             
             <div v-if="updateInfo?.has_update" class="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-lg border border-amber-200 dark:border-amber-500/20">
@@ -466,6 +531,9 @@ onBeforeUnmount(() => {
                </div>
                <div class="text-xs text-amber-700 dark:text-amber-300/80 mb-4 whitespace-pre-wrap max-h-32 overflow-y-auto pr-2 custom-scrollbar">
                  {{ updateInfo.release_note || '暂无更新说明' }}
+               </div>
+               <div class="text-xs text-amber-700 dark:text-amber-300 mb-3">
+                 本次检查入口：{{ updateProxyLabel(updateInfo.proxy_id) }}
                </div>
                <div v-if="updateInfo.migration_required" class="text-xs text-amber-700 dark:text-amber-300 mb-3">
                  当前构建未使用正式版本号，将按迁移更新处理。
@@ -481,6 +549,9 @@ onBeforeUnmount(() => {
               <div class="flex items-center justify-between gap-3 text-sm font-semibold text-gray-800 dark:text-gray-100">
                 <span>更新状态：{{ updateStateLabel(updateStatus.state) }}</span>
                 <span class="font-mono text-xs text-gray-500">{{ updateStatus.progress }}%</span>
+              </div>
+              <div v-if="updateStatus.proxy_id" class="mt-2 text-xs text-gray-500">
+                更新入口：{{ updateProxyLabel(updateStatus.proxy_id) }}
               </div>
               <el-progress class="mt-3" :percentage="Math.max(0, Math.min(100, updateStatus.progress))" :status="updateStatus.state === 'success' ? 'success' : updateStatus.state === 'failed' || updateStatus.state === 'rolled_back' ? 'exception' : undefined" />
               <div class="mt-2 text-xs text-gray-500 whitespace-pre-wrap">{{ updateStatus.message || updateStatus.error }}</div>

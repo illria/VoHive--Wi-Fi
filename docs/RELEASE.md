@@ -37,6 +37,7 @@ vohive_<tag>_linux_<arch>.tar.gz.sha256
 1. UI 调用 `/system/update/check`。
 2. 用户阅读 Release Note 后调用 `/system/update/apply`。
 3. 服务端下载匹配的裸二进制和 `.sha256` 文件。
+   - 默认会按顺序尝试多个 GitHub 加速入口，失败后回退直连；请求可通过 `proxy_id` 选择具体入口。
 4. 服务端检查文件大小、计算 SHA-256，并将当前二进制备份到运行文件旁的 `update/backup`。
 5. 服务端原子替换运行文件，写入 `update/status.json`，发送重启信号。
 6. 新进程启动后调用健康确认；异常启动场景保留回滚信息并在健康窗口结束后尝试恢复旧版本。

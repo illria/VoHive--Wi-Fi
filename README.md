@@ -43,9 +43,35 @@ SIM PIN Web 状态、PIN1/UPIN 映射、单次验证边界和手工验证清单�
 
 ## 在线更新
 
-登录后可在“系统设置”中检查稳定 Release、阅读 Release Note，并确认更新。服务端会按当前架构选择精确资产，下载后验证 SHA-256，再备份并原子替换运行文件；前端通过状态接口轮询下载、校验、替换、重启和回滚状态。
+登录后可在“系统设置”中检查稳定 Release、阅读 Release Note，并确认更新。更新入口默认使用“自动（推荐）”：服务端会依次尝试多个 GitHub 加速入口，失败后回退直连；也可以在页面中手动选择某个入口。服务端会按当前架构选择精确资产，下载后验证 SHA-256，再备份并原子替换运行文件；前端通过状态接口轮询下载、校验、替换、重启和回滚状态。
 
 在线更新不会删除 `/opt/vohive/config/config.yaml`、`/opt/vohive/data`、用户账号、通知配置、APN、短信数据或设备配置。Docker 环境不执行运行中二进制替换，应由容器部署流程更新镜像。
+
+公共 GitHub 代理是第三方入口，可能临时失效或速度波动；“自动”会继续尝试下一个入口。下载完成后仍会校验 Release 提供的 SHA-256，代理可用性和隐私风险需要按使用环境自行判断。
+
+## 手动升级
+
+如果设备无法访问 GitHub，先在电脑浏览器或“系统设置”的 GitHub 加速入口中下载目标架构的两个文件：
+
+- `vohive_vX.Y.Z_linux_arm64.tar.gz`（aarch64 设备）或对应的 `amd64`、`armv7` 文件
+- 同名的 `.sha256` 校验文件
+
+将两个文件上传到设备后执行以下命令（以 arm64 和 `/opt/vohive` 为例）：
+
+```sh
+cd /tmp
+sha256sum -c vohive_vX.Y.Z_linux_arm64.tar.gz.sha256
+rm -rf vohive-upgrade
+mkdir vohive-upgrade
+tar -xzf vohive_vX.Y.Z_linux_arm64.tar.gz -C vohive-upgrade
+cp -a /opt/vohive/bin/vohive /opt/vohive/bin/vohive.bak
+systemctl stop vohive
+install -m 0755 vohive-upgrade/vohive /opt/vohive/bin/vohive
+systemctl start vohive
+systemctl is-active --quiet vohive
+```
+
+手动升级只替换运行文件，不删除 `/opt/vohive/config`、`/opt/vohive/data`；启动失败时可用 `/opt/vohive/bin/vohive.bak` 恢复后再启动服务。若设备没有 systemd，停止并启动现有 VoHive 进程即可。
 
 ## 社区
 

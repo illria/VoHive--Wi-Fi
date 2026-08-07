@@ -16,6 +16,14 @@ export type UpdateInfo = {
   migration_required: boolean
   supported: boolean
   channel: string
+  proxy_id: string
+  proxy_options: UpdateProxyOption[]
+}
+
+export type UpdateProxyOption = {
+  id: string
+  name: string
+  description: string
 }
 
 export type UpdateState =
@@ -35,6 +43,7 @@ export type UpdateStatus = {
   state: UpdateState
   current_version: string
   target_version: string
+  proxy_id?: string
   progress: number
   message: string
   error: string
@@ -274,15 +283,21 @@ export const systemService = {
       return res.data
     })
   },
-  checkUpdate() {
+  getUpdateProxies() {
     return callService(async () => {
-      const res = await api.get<UpdateInfo>('/system/update/check')
+      const res = await api.get<UpdateProxyOption[]>('/system/update/proxies')
       return res.data
     })
   },
-  applyUpdate() {
+  checkUpdate(proxyID = 'auto') {
     return callService(async () => {
-      const res = await api.post<UpdateStatus>('/system/update/apply', {})
+      const res = await api.get<UpdateInfo>('/system/update/check', { params: { proxy_id: proxyID } })
+      return res.data
+    })
+  },
+  applyUpdate(proxyID = 'auto') {
+    return callService(async () => {
+      const res = await api.post<UpdateStatus>('/system/update/apply', { proxy_id: proxyID })
       return res.data
     })
   },

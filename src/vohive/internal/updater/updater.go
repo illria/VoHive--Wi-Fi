@@ -76,6 +76,7 @@ const (
 	ErrRollbackFailed          ErrorCode = "rollback_failed"
 	ErrDockerUnsupported       ErrorCode = "docker_update_unsupported"
 	ErrRestartFailed           ErrorCode = "restart_failed"
+	ErrInvalidGitHubProxy      ErrorCode = "invalid_github_proxy"
 )
 
 type UpdateError struct {
@@ -131,21 +132,24 @@ type Asset struct {
 }
 
 type UpdateInfo struct {
-	HasUpdate       bool   `json:"has_update"`
-	CurrentVer      string `json:"current_version"`
-	LatestVer       string `json:"latest_version"`
-	ReleaseNote     string `json:"release_note"`
-	IsDocker        bool   `json:"is_docker"`
-	MigrationRequired bool `json:"migration_required"`
-	Supported       bool   `json:"supported"`
-	Channel         string `json:"channel"`
-	ErrorCode       string `json:"error_code,omitempty"`
+	HasUpdate         bool          `json:"has_update"`
+	CurrentVer        string        `json:"current_version"`
+	LatestVer         string        `json:"latest_version"`
+	ReleaseNote       string        `json:"release_note"`
+	IsDocker          bool          `json:"is_docker"`
+	MigrationRequired bool          `json:"migration_required"`
+	Supported         bool          `json:"supported"`
+	Channel           string        `json:"channel"`
+	ProxyID           string        `json:"proxy_id"`
+	ProxyOptions      []ProxyOption `json:"proxy_options"`
+	ErrorCode         string        `json:"error_code,omitempty"`
 }
 
 type UpdateStatus struct {
 	State          UpdateState `json:"state"`
 	CurrentVersion string      `json:"current_version"`
 	TargetVersion  string      `json:"target_version"`
+	ProxyID        string      `json:"proxy_id,omitempty"`
 	Progress       int         `json:"progress"`
 	Message        string      `json:"message"`
 	Error          string      `json:"error"`
@@ -269,12 +273,20 @@ var defaultManager = NewManager(Options{})
 
 func CheckUpdate() (*UpdateInfo, error) { return defaultManager.CheckUpdate() }
 
+func CheckUpdateWithProxy(proxyID string) (*UpdateInfo, error) {
+	return defaultManager.CheckUpdateWithProxy(proxyID)
+}
+
 func ApplyUpdate() error {
 	_, err := defaultManager.StartUpdate()
 	return err
 }
 
 func StartUpdate() (UpdateStatus, error) { return defaultManager.StartUpdate() }
+
+func StartUpdateWithProxy(proxyID string) (UpdateStatus, error) {
+	return defaultManager.StartUpdateWithProxy(proxyID)
+}
 
 func CurrentStatus() UpdateStatus { return defaultManager.Status() }
 
@@ -287,7 +299,11 @@ func (m *Manager) Status() UpdateStatus {
 }
 
 func (m *Manager) CheckUpdate() (*UpdateInfo, error) {
-	release, err := m.fetchRelease()
+	return m.CheckUpdateWithProxy(ProxyAuto)
+}
+
+func (m *Manager) CheckUpdateWithProxy(proxyID string) (*UpdateInfo, error) {
+	release, proxy, err := m.fetchReleaseWithProxy(proxyID)
 	if err != nil {
 		return nil, err
 	}
@@ -320,10 +336,16 @@ func (m *Manager) CheckUpdate() (*UpdateInfo, error) {
 		MigrationRequired: legacy,
 		Supported:         supported,
 		Channel:           string(m.channel),
+		ProxyID:           proxy.ID,
+		ProxyOptions:      GitHubProxyOptions(),
 	}, nil
 }
 
 func (m *Manager) StartUpdate() (UpdateStatus, error) {
+	return m.StartUpdateWithProxy(ProxyAuto)
+}
+
+func (m *Manager) StartUpdateWithProxy(proxyID string) (UpdateStatus, error) {
 	m.mu.Lock()
 	if m.running || updateInProgress(m.state.State) {
 		status := m.state
@@ -339,6 +361,7 @@ func (m *Manager) StartUpdate() (UpdateStatus, error) {
 	m.state = UpdateStatus{
 		State:          StateChecking,
 		CurrentVersion: strings.TrimSpace(global.Version),
+		ProxyID:        normalizeProxyID(proxyID),
 		Progress:       0,
 		Message:        "正在检查更新",
 		UpdatedAt:      m.now(),
@@ -347,12 +370,12 @@ func (m *Manager) StartUpdate() (UpdateStatus, error) {
 	m.mu.Unlock()
 	m.persistStatus(status)
 
-	go m.runUpdate()
+	go m.runUpdate(proxyID)
 	return status, nil
 }
 
-func (m *Manager) runUpdate() {
-	release, err := m.fetchRelease()
+func (m *Manager) runUpdate(proxyID string) {
+	release, proxy, err := m.fetchReleaseWithProxy(proxyID)
 	if err != nil {
 		m.fail(err)
 		return
@@ -372,6 +395,9 @@ func (m *Manager) runUpdate() {
 		m.fail(newUpdateError(ErrNoUpdate, "当前版本不低于远端 Release", nil))
 		return
 	}
+	m.mu.Lock()
+	m.state.ProxyID = proxy.ID
+	m.mu.Unlock()
 	m.setState(StateAvailable, 0, "发现可用更新", latestVersion)
 
 	arch, supported := runtimeAssetKey()
@@ -403,24 +429,15 @@ func (m *Manager) runUpdate() {
 		return
 	}
 
-	m.setState(StateDownloading, 0, "正在下载更新", latestVersion)
-	downloadPath, err := m.downloadBinary(binaryAsset, downloadDir, latestVersion)
+	downloadPath, proxy, err = m.downloadAndVerifyAssets(binaryAsset, checksumAsset, downloadDir, latestVersion, proxyID)
 	if err != nil {
 		m.fail(err)
 		return
 	}
 	defer os.Remove(downloadPath)
-
-	m.setState(StateVerifying, 0, "正在验证 SHA-256", latestVersion)
-	checksum, err := m.downloadChecksum(checksumAsset)
-	if err != nil {
-		m.fail(err)
-		return
-	}
-	if err := verifyChecksum(downloadPath, checksum); err != nil {
-		m.fail(err)
-		return
-	}
+	m.mu.Lock()
+	m.state.ProxyID = proxy.ID
+	m.mu.Unlock()
 
 	m.setState(StateBackingUp, 0, "正在备份当前版本", latestVersion)
 	m.setState(StateApplying, 0, "正在替换当前版本", latestVersion)
@@ -450,16 +467,41 @@ func (m *Manager) runUpdate() {
 }
 
 func (m *Manager) fetchRelease() (Release, error) {
+	release, _, err := m.fetchReleaseWithProxy(ProxyAuto)
+	return release, err
+}
+
+func (m *Manager) fetchReleaseWithProxy(proxyID string) (Release, githubProxy, error) {
+	candidates, ok := proxyCandidates(proxyID)
+	if !ok {
+		return Release{}, githubProxy{}, newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
+	}
+	var lastErr error
+	for _, proxy := range candidates {
+		release, err := m.fetchReleaseViaProxy(proxy)
+		if err == nil {
+			return release, proxy, nil
+		}
+		lastErr = err
+		logger.Warn("GitHub 更新入口不可用，尝试下一个入口", "proxy", proxy.ID, "err", err)
+	}
+	if lastErr == nil {
+		lastErr = newUpdateError(ErrGitHubUnreachable, "没有可用的 GitHub 更新入口", nil)
+	}
+	return Release{}, githubProxy{}, lastErr
+}
+
+func (m *Manager) fetchReleaseViaProxy(proxy githubProxy) (Release, error) {
 	if m.channel == ChannelPrerelease {
 		var releases []Release
-		if err := m.getJSON("/repos/"+m.repoOwner+"/"+m.repoName+"/releases?per_page=100", &releases, ErrGitHubUnreachable); err != nil {
+		if err := m.getJSONWithProxy(proxy, "/repos/"+m.repoOwner+"/"+m.repoName+"/releases?per_page=100", &releases, ErrGitHubUnreachable); err != nil {
 			return Release{}, err
 		}
 		return selectPrereleaseRelease(releases)
 	}
 
 	var release Release
-	if err := m.getJSON("/repos/"+m.repoOwner+"/"+m.repoName+"/releases/latest", &release, ErrGitHubUnreachable); err != nil {
+	if err := m.getJSONWithProxy(proxy, "/repos/"+m.repoOwner+"/"+m.repoName+"/releases/latest", &release, ErrGitHubUnreachable); err != nil {
 		return Release{}, err
 	}
 	if release.Draft || release.Prerelease && !m.allowPrerelease {
@@ -474,7 +516,11 @@ func (m *Manager) fetchRelease() (Release, error) {
 }
 
 func (m *Manager) getJSON(path string, target any, networkCode ErrorCode) error {
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, m.apiBaseURL+path, nil)
+	return m.getJSONWithProxy(githubProxy{}, path, target, networkCode)
+}
+
+func (m *Manager) getJSONWithProxy(proxy githubProxy, path string, target any, networkCode ErrorCode) error {
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rewriteGitHubURL(proxy, m.apiBaseURL+path), nil)
 	if err != nil {
 		return newUpdateError(networkCode, "创建 GitHub 请求失败", err)
 	}
@@ -593,8 +639,48 @@ func findAssets(assets []Asset, binaryName string) (Asset, Asset, error) {
 	return binary, checksum, nil
 }
 
+func (m *Manager) downloadAndVerifyAssets(binaryAsset, checksumAsset Asset, directory, targetVersion, proxyID string) (string, githubProxy, error) {
+	candidates, ok := proxyCandidates(proxyID)
+	if !ok {
+		return "", githubProxy{}, newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
+	}
+
+	var lastErr error
+	for _, proxy := range candidates {
+		m.setState(StateDownloading, 0, fmt.Sprintf("正在通过 %s 下载更新", proxy.Name), targetVersion)
+		downloadPath, err := m.downloadBinaryWithProxy(binaryAsset, directory, targetVersion, proxy)
+		if err != nil {
+			lastErr = err
+			logger.Warn("GitHub 更新资产下载失败，尝试下一个入口", "proxy", proxy.ID, "err", err)
+			continue
+		}
+
+		m.setState(StateVerifying, 0, fmt.Sprintf("正在通过 %s 验证 SHA-256", proxy.Name), targetVersion)
+		checksum, err := m.downloadChecksumWithProxy(checksumAsset, proxy)
+		if err == nil {
+			err = verifyChecksum(downloadPath, checksum)
+		}
+		if err == nil {
+			m.setState(StateVerifying, 100, "SHA-256 校验通过", targetVersion)
+			return downloadPath, proxy, nil
+		}
+
+		_ = os.Remove(downloadPath)
+		lastErr = err
+		logger.Warn("GitHub 更新资产校验失败，尝试下一个入口", "proxy", proxy.ID, "err", err)
+	}
+	if lastErr == nil {
+		lastErr = newUpdateError(ErrDownloadFailed, "没有可用的 GitHub 下载入口", nil)
+	}
+	return "", githubProxy{}, lastErr
+}
+
 func (m *Manager) downloadBinary(asset Asset, directory, targetVersion string) (string, error) {
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, asset.BrowserDownloadURL, nil)
+	return m.downloadBinaryWithProxy(asset, directory, targetVersion, githubProxy{})
+}
+
+func (m *Manager) downloadBinaryWithProxy(asset Asset, directory, targetVersion string, proxy githubProxy) (string, error) {
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rewriteGitHubURL(proxy, asset.BrowserDownloadURL), nil)
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "创建二进制下载请求失败", err)
 	}
@@ -675,7 +761,11 @@ func (w *progressWriter) Write(data []byte) (int, error) {
 }
 
 func (m *Manager) downloadChecksum(asset Asset) (string, error) {
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, asset.BrowserDownloadURL, nil)
+	return m.downloadChecksumWithProxy(asset, githubProxy{})
+}
+
+func (m *Manager) downloadChecksumWithProxy(asset Asset, proxy githubProxy) (string, error) {
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rewriteGitHubURL(proxy, asset.BrowserDownloadURL), nil)
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "创建 SHA-256 下载请求失败", err)
 	}
