@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -473,6 +474,99 @@ func TestRunUpdateDownloadsVerifiesReplacesAndSignals(t *testing.T) {
 	case <-signalDeadline.C:
 		t.Fatal("update did not signal restart")
 	}
+}
+
+func TestRunUpdatePinsProxySelectedDuringAutoCheck(t *testing.T) {
+	setTestVersion(t, "v1.0.0")
+	if runtime.GOOS != "linux" {
+		t.Skip("release assets are Linux-only")
+	}
+	arch, supported := runtimeAssetKey()
+	if !supported {
+		t.Skip("test runner architecture is not a supported release target")
+	}
+
+	payload := bytesForTest(4096)
+	digest := sha256.Sum256(payload)
+	binaryURL := "https://github.com/illria/VoHive--Wi-Fi/releases/download/v1.1.0/vohive_v1.1.0_linux_" + arch
+	checksumURL := binaryURL + ".sha256"
+	releaseBody, err := json.Marshal(testRelease("v1.1.0", "update", []Asset{
+		{Name: "vohive_v1.1.0_linux_" + arch, BrowserDownloadURL: binaryURL},
+		{Name: "vohive_v1.1.0_linux_" + arch + ".sha256", BrowserDownloadURL: checksumURL},
+	}))
+	if err != nil {
+		t.Fatalf("marshal release: %v", err)
+	}
+
+	var requestedURLs []string
+	response := func(request *http.Request, status int, body []byte) *http.Response {
+		return &http.Response{
+			StatusCode:    status,
+			Status:        http.StatusText(status),
+			Header:        make(http.Header),
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       request,
+		}
+	}
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestURL := request.URL.String()
+		requestedURLs = append(requestedURLs, requestURL)
+		switch {
+		case strings.HasPrefix(requestURL, "https://ghfast.top/"):
+			return response(request, http.StatusGatewayTimeout, []byte("ghfast unavailable")), nil
+		case strings.HasPrefix(requestURL, "https://ghproxy.net/") && strings.Contains(requestURL, "/releases/latest"):
+			return response(request, http.StatusOK, releaseBody), nil
+		case strings.HasPrefix(requestURL, "https://ghproxy.net/") && strings.Contains(requestURL, "/releases/download/"):
+			if strings.HasSuffix(requestURL, ".sha256") {
+				return response(request, http.StatusOK, []byte(hex.EncodeToString(digest[:])+"  binary\n")), nil
+			}
+			return response(request, http.StatusOK, payload), nil
+		default:
+			return response(request, http.StatusNotFound, nil), nil
+		}
+	})
+
+	root := t.TempDir()
+	executable := filepath.Join(root, "vohive")
+	if err := os.WriteFile(executable, []byte("old-version"), 0o755); err != nil {
+		t.Fatalf("create executable: %v", err)
+	}
+	signaled := make(chan struct{}, 1)
+	manager := NewManager(Options{
+		HTTPClient:    &http.Client{Transport: transport, Timeout: 2 * time.Second},
+		Executable:   func() (string, error) { return executable, nil },
+		Signal:        func(os.Signal) error { signaled <- struct{}{}; return nil },
+		IsDocker:      func() bool { return false },
+		MinBinarySize: 1,
+		MaxBinarySize: 1 << 20,
+		SignalDelay:   time.Millisecond,
+	})
+
+	manager.runUpdate(ProxyAuto)
+	if status := manager.Status(); status.State != StateRestarting {
+		t.Fatalf("update did not reach restarting state: %+v", status)
+	}
+	select {
+	case <-signaled:
+	case <-time.After(time.Second):
+		t.Fatal("update did not signal restart")
+	}
+
+	for _, requestURL := range requestedURLs {
+		if strings.Contains(requestURL, "/releases/download/") && !strings.HasPrefix(requestURL, "https://ghproxy.net/") {
+			t.Fatalf("asset request switched away from selected proxy: %s", requestURL)
+		}
+	}
+	if len(requestedURLs) != 4 {
+		t.Fatalf("unexpected request sequence: %+v", requestedURLs)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }
 
 func bytesForTest(size int) []byte {

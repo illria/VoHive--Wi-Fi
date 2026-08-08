@@ -429,15 +429,16 @@ func (m *Manager) runUpdate(proxyID string) {
 		return
 	}
 
-	downloadPath, proxy, err := m.downloadAndVerifyAssets(binaryAsset, checksumAsset, downloadDir, latestVersion, proxyID)
+	// The metadata request may use auto mode to find a working entry. Keep that
+	// concrete entry for the entire download and verification phase; rotating
+	// after a response body has started can leave a partial binary and make the
+	// next endpoint unable to resume the same transfer.
+	downloadPath, err := m.downloadAndVerifyAssets(binaryAsset, checksumAsset, downloadDir, latestVersion, proxy)
 	if err != nil {
 		m.fail(err)
 		return
 	}
 	defer os.Remove(downloadPath)
-	m.mu.Lock()
-	m.state.ProxyID = proxy.ID
-	m.mu.Unlock()
 
 	m.setState(StateBackingUp, 0, "正在备份当前版本", latestVersion)
 	m.setState(StateApplying, 0, "正在替换当前版本", latestVersion)
@@ -639,40 +640,31 @@ func findAssets(assets []Asset, binaryName string) (Asset, Asset, error) {
 	return binary, checksum, nil
 }
 
-func (m *Manager) downloadAndVerifyAssets(binaryAsset, checksumAsset Asset, directory, targetVersion, proxyID string) (string, githubProxy, error) {
-	candidates, ok := proxyCandidates(proxyID)
-	if !ok {
-		return "", githubProxy{}, newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
+func (m *Manager) downloadAndVerifyAssets(binaryAsset, checksumAsset Asset, directory, targetVersion string, proxy githubProxy) (string, error) {
+	if proxy.ID == "" {
+		return "", newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
 	}
 
-	var lastErr error
-	for _, proxy := range candidates {
-		m.setState(StateDownloading, 0, fmt.Sprintf("正在通过 %s 下载更新", proxy.Name), targetVersion)
-		downloadPath, err := m.downloadBinaryWithProxy(binaryAsset, directory, targetVersion, proxy)
-		if err != nil {
-			lastErr = err
-			logger.Warn("GitHub 更新资产下载失败，尝试下一个入口", "proxy", proxy.ID, "err", err)
-			continue
-		}
+	m.setState(StateDownloading, 0, fmt.Sprintf("正在通过 %s 下载更新", proxy.Name), targetVersion)
+	downloadPath, err := m.downloadBinaryWithProxy(binaryAsset, directory, targetVersion, proxy)
+	if err != nil {
+		logger.Warn("GitHub 更新资产下载失败，本次任务保持当前入口", "proxy", proxy.ID, "err", err)
+		return "", err
+	}
 
-		m.setState(StateVerifying, 0, fmt.Sprintf("正在通过 %s 验证 SHA-256", proxy.Name), targetVersion)
-		checksum, err := m.downloadChecksumWithProxy(checksumAsset, proxy)
-		if err == nil {
-			err = verifyChecksum(downloadPath, checksum)
-		}
-		if err == nil {
-			m.setState(StateVerifying, 100, "SHA-256 校验通过", targetVersion)
-			return downloadPath, proxy, nil
-		}
-
+	m.setState(StateVerifying, 0, fmt.Sprintf("正在通过 %s 验证 SHA-256", proxy.Name), targetVersion)
+	checksum, err := m.downloadChecksumWithProxy(checksumAsset, proxy)
+	if err == nil {
+		err = verifyChecksum(downloadPath, checksum)
+	}
+	if err != nil {
 		_ = os.Remove(downloadPath)
-		lastErr = err
-		logger.Warn("GitHub 更新资产校验失败，尝试下一个入口", "proxy", proxy.ID, "err", err)
+		logger.Warn("GitHub 更新资产校验失败，本次任务保持当前入口", "proxy", proxy.ID, "err", err)
+		return "", err
 	}
-	if lastErr == nil {
-		lastErr = newUpdateError(ErrDownloadFailed, "没有可用的 GitHub 下载入口", nil)
-	}
-	return "", githubProxy{}, lastErr
+
+	m.setState(StateVerifying, 100, "SHA-256 校验通过", targetVersion)
+	return downloadPath, nil
 }
 
 func (m *Manager) downloadBinary(asset Asset, directory, targetVersion string) (string, error) {

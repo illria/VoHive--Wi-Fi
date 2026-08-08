@@ -30,8 +30,8 @@ func normalizeProxyID(proxyID string) string {
 }
 
 // Public proxy services are intentionally fallback options, not mandatory
-// dependencies. Their availability can change, so auto mode tries each one
-// and ends with a direct GitHub request.
+// dependencies. Auto mode tries each one while resolving release metadata,
+// then pins the first successful entry for the rest of the update task.
 var githubProxyCatalog = []githubProxy{
 	{
 		ProxyOption: ProxyOption{ID: "ghfast", Name: "ghfast.top", Description: "公共加速入口，适合 GitHub API 和 Release 下载"},
@@ -56,7 +56,7 @@ func GitHubProxyOptions() []ProxyOption {
 	options = append(options, ProxyOption{
 		ID:          ProxyAuto,
 		Name:        "自动（推荐）",
-		Description: "按顺序尝试多个 GitHub 加速入口，失败后回退直连",
+		Description: "检查阶段自动选择入口，下载和校验阶段保持不变",
 	})
 	for _, proxy := range githubProxyCatalog {
 		options = append(options, proxy.ProxyOption)

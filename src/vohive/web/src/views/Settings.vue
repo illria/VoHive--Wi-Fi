@@ -406,7 +406,12 @@ async function doApplyUpdate() {
       { confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
     )
     applyingUpdate.value = true
-    const res = await systemService.applyUpdate(selectedUpdateProxy.value)
+    // Auto mode resolves a concrete entry during the check. Reuse that entry
+    // for apply so the update task does not select a different route again.
+    const proxyForApply = selectedUpdateProxy.value === 'auto'
+      ? (updateInfo.value.proxy_id || 'auto')
+      : selectedUpdateProxy.value
+    const res = await systemService.applyUpdate(proxyForApply)
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
     updateStatus.value = res.data
     ElMessage.success('更新任务已开始，请等待服务重启')
@@ -501,7 +506,7 @@ onBeforeUnmount(() => {
               <div class="mt-3 flex flex-col gap-2 border-t border-gray-200 pt-3 dark:border-white/10 sm:flex-row sm:items-center sm:justify-between">
                 <div class="min-w-0">
                   <div class="text-xs font-semibold text-gray-600 dark:text-gray-300">GitHub 更新入口</div>
-                  <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">自动模式会依次尝试加速代理，失败后回退直连</div>
+                  <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">自动模式只在检查阶段选择入口，开始下载后保持不变</div>
                 </div>
                 <el-select
                   class="w-full sm:w-72"
