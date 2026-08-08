@@ -22,6 +22,9 @@ function updateHtmlClass(mode: 'dark' | 'light') {
   } else {
     document.documentElement.classList.remove('dark')
   }
+
+  const themeMeta = document.querySelector('meta[name="theme-color"]')
+  themeMeta?.setAttribute('content', mode === 'dark' ? '#000000' : '#fafafa')
 }
 
 onMounted(() => {
@@ -38,7 +41,7 @@ const shell = computed(() =>
 </script>
 
 <template>
-  <div class="h-screen w-screen overflow-hidden bg-[var(--vh-bg)] text-[var(--vh-text)] font-sans selection:bg-zinc-900 selection:text-white transition-colors duration-300">
+  <div class="h-screen w-screen overflow-hidden bg-[var(--vh-bg)] text-[var(--vh-text)] font-sans selection:bg-[var(--vh-text-strong)] selection:text-[var(--vh-bg)] transition-colors duration-300">
     <Suspense>
       <template #default>
         <component :is="shell" :is-dark="isDark" @toggle-theme="toggleTheme" />

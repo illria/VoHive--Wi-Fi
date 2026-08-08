@@ -13,9 +13,16 @@
   --vh-accent: #111111;
   --vh-accent-contrast: #ffffff;
   --vh-link: #0070f3;
+  --vh-link-hover: #005fcc;
+  --vh-action: #0070f3;
+  --vh-action-hover: #005fcc;
+  --vh-action-contrast: #ffffff;
   --vh-success: #0a7f45;
+  --vh-success-contrast: #ffffff;
   --vh-warning: #b45309;
+  --vh-warning-contrast: #ffffff;
   --vh-danger: #d1242f;
+  --vh-danger-contrast: #ffffff;
   --vh-focus: rgba(0, 112, 243, 0.22);
   --vh-radius-xs: 6px;
   --vh-radius-sm: 8px;
@@ -27,6 +34,39 @@
   --vh-shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
   --vh-sidebar-width: 240px;
   --vh-topbar-height: 64px;
+
+  /* Element Plus consumes these variables at runtime. Keeping them tied to
+     the same semantic tokens prevents a control from falling back to the
+     library's default blue/white palette in either theme. */
+  --el-color-primary: var(--vh-action);
+  --el-color-primary-light-3: color-mix(in srgb, var(--vh-action) 70%, var(--vh-surface));
+  --el-color-primary-light-5: color-mix(in srgb, var(--vh-action) 50%, var(--vh-surface));
+  --el-color-primary-light-7: color-mix(in srgb, var(--vh-action) 30%, var(--vh-surface));
+  --el-color-primary-light-8: color-mix(in srgb, var(--vh-action) 20%, var(--vh-surface));
+  --el-color-primary-light-9: color-mix(in srgb, var(--vh-action) 10%, var(--vh-surface));
+  --el-color-primary-dark-2: var(--vh-action-hover);
+  --el-color-success: var(--vh-success);
+  --el-color-warning: var(--vh-warning);
+  --el-color-danger: var(--vh-danger);
+  --el-color-info: var(--vh-text-muted);
+  --el-bg-color: var(--vh-surface);
+  --el-bg-color-page: var(--vh-bg);
+  --el-bg-color-overlay: var(--vh-surface);
+  --el-text-color-primary: var(--vh-text-strong);
+  --el-text-color-regular: var(--vh-text);
+  --el-text-color-secondary: var(--vh-text-muted);
+  --el-text-color-placeholder: var(--vh-text-subtle);
+  --el-text-color-disabled: var(--vh-text-subtle);
+  --el-border-color: var(--vh-border-strong);
+  --el-border-color-light: var(--vh-border);
+  --el-border-color-lighter: var(--vh-border);
+  --el-fill-color: var(--vh-surface-muted);
+  --el-fill-color-light: var(--vh-surface-muted);
+  --el-fill-color-lighter: var(--vh-surface-subtle);
+  --el-fill-color-blank: var(--vh-surface);
+  --el-disabled-bg-color: var(--vh-surface-muted);
+  --el-disabled-text-color: var(--vh-text-subtle);
+  --el-disabled-border-color: var(--vh-border);
 }
 
 html.dark {
@@ -44,9 +84,16 @@ html.dark {
   --vh-accent: #ffffff;
   --vh-accent-contrast: #000000;
   --vh-link: #3291ff;
+  --vh-link-hover: #5aa9ff;
+  --vh-action: #3291ff;
+  --vh-action-hover: #5aa9ff;
+  --vh-action-contrast: #000000;
   --vh-success: #4ade80;
+  --vh-success-contrast: #052e16;
   --vh-warning: #fbbf24;
+  --vh-warning-contrast: #1c1917;
   --vh-danger: #f87171;
+  --vh-danger-contrast: #450a0a;
   --vh-focus: rgba(50, 145, 255, 0.32);
   --vh-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.24);
   --vh-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.38), 0 12px 32px rgba(0, 0, 0, 0.22);
@@ -234,33 +281,48 @@ html.dark {
 }
 
 .login-submit {
+  width: 100%;
   min-height: 42px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--vh-action);
   border-radius: var(--vh-radius-sm);
-  background: var(--vh-accent);
-  color: var(--vh-accent-contrast);
+  appearance: none;
+  background-color: var(--vh-action);
+  color: var(--vh-action-contrast);
   font: inherit;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 160ms ease, transform 160ms ease;
+  box-shadow: var(--vh-shadow-xs), 0 4px 12px color-mix(in srgb, var(--vh-action) 18%, transparent);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .login-submit:hover:not(:disabled) {
-  opacity: 0.84;
+  border-color: var(--vh-action-hover);
+  background-color: var(--vh-action-hover);
+  box-shadow: var(--vh-shadow-card), 0 6px 16px color-mix(in srgb, var(--vh-action) 24%, transparent);
 }
 
 .login-submit:active:not(:disabled) {
   transform: translateY(1px);
 }
 
+.login-submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--vh-focus), var(--vh-shadow-xs);
+}
+
 .login-submit:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  border-color: var(--vh-border-strong);
+  background-color: var(--vh-surface-muted);
+  color: var(--vh-text-subtle);
+  box-shadow: none;
+  opacity: 1;
 }
 
 .login-footer {

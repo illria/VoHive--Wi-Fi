@@ -39,6 +39,47 @@ select:focus-visible {
   color: var(--vh-bg);
 }
 
+/* A few older screens still use Tailwind's neutral utility names. Map the
+   shared neutral subset back to product tokens so those screens follow the
+   same surface/text/border rules as the redesigned shell. Explicit dark:*
+   utilities remain more specific and can still express a special state. */
+.bg-white {
+  background-color: var(--vh-surface);
+}
+
+.bg-gray-50,
+.bg-gray-100 {
+  background-color: var(--vh-surface-muted);
+}
+
+.text-gray-900 {
+  color: var(--vh-text-strong);
+}
+
+.text-gray-800,
+.text-gray-700 {
+  color: var(--vh-text);
+}
+
+.text-gray-600,
+.text-gray-500 {
+  color: var(--vh-text-muted);
+}
+
+.text-gray-400,
+.text-gray-300 {
+  color: var(--vh-text-subtle);
+}
+
+.border-gray-100 {
+  border-color: var(--vh-border);
+}
+
+.border-gray-200,
+.border-gray-300 {
+  border-color: var(--vh-border-strong);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -83,26 +124,26 @@ select:focus-visible {
 }
 
 .el-button--primary {
-  --el-button-bg-color: var(--vh-accent);
-  --el-button-border-color: var(--vh-accent);
-  --el-button-text-color: var(--vh-accent-contrast);
-  --el-button-hover-bg-color: color-mix(in srgb, var(--vh-accent) 84%, transparent);
-  --el-button-hover-border-color: var(--vh-accent);
-  --el-button-hover-text-color: var(--vh-accent-contrast);
+  --el-button-bg-color: var(--vh-action);
+  --el-button-border-color: var(--vh-action);
+  --el-button-text-color: var(--vh-action-contrast);
+  --el-button-hover-bg-color: var(--vh-action-hover);
+  --el-button-hover-border-color: var(--vh-action-hover);
+  --el-button-hover-text-color: var(--vh-action-contrast);
 }
 
 /* Keep solid primary controls readable across Element Plus theme variables.
    Plain, text, and link buttons retain their own outline/link treatment. */
 .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
-  background-color: var(--vh-link) !important;
-  border-color: var(--vh-link) !important;
-  color: #ffffff !important;
+  background-color: var(--vh-action) !important;
+  border-color: var(--vh-action) !important;
+  color: var(--vh-action-contrast) !important;
 }
 
 .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):hover:not(.is-disabled) {
-  background-color: color-mix(in srgb, var(--vh-link) 84%, #000000) !important;
-  border-color: var(--vh-link) !important;
-  color: #ffffff !important;
+  background-color: var(--vh-action-hover) !important;
+  border-color: var(--vh-action-hover) !important;
+  color: var(--vh-action-contrast) !important;
 }
 
 .el-button--primary.is-disabled,
@@ -113,6 +154,46 @@ select:focus-visible {
   opacity: 1;
 }
 
+.el-button--success:not(.is-plain):not(.is-text):not(.is-link),
+.el-button--warning:not(.is-plain):not(.is-text):not(.is-link),
+.el-button--danger:not(.is-plain):not(.is-text):not(.is-link) {
+  border-color: transparent !important;
+}
+
+.el-button--success:not(.is-plain):not(.is-text):not(.is-link) {
+  background-color: var(--vh-success) !important;
+  color: var(--vh-success-contrast) !important;
+}
+
+.el-button--warning:not(.is-plain):not(.is-text):not(.is-link) {
+  background-color: var(--vh-warning) !important;
+  color: var(--vh-warning-contrast) !important;
+}
+
+.el-button--danger:not(.is-plain):not(.is-text):not(.is-link) {
+  background-color: var(--vh-danger) !important;
+  color: var(--vh-danger-contrast) !important;
+}
+
+.el-button--success:not(.is-plain):not(.is-text):not(.is-link):hover:not(.is-disabled),
+.el-button--warning:not(.is-plain):not(.is-text):not(.is-link):hover:not(.is-disabled),
+.el-button--danger:not(.is-plain):not(.is-text):not(.is-link):hover:not(.is-disabled) {
+  filter: brightness(0.92);
+}
+
+.el-button--success.is-disabled,
+.el-button--warning.is-disabled,
+.el-button--danger.is-disabled,
+.el-button--success.is-disabled:hover,
+.el-button--warning.is-disabled:hover,
+.el-button--danger.is-disabled:hover {
+  background-color: var(--vh-surface-muted) !important;
+  border-color: var(--vh-border-strong) !important;
+  color: var(--vh-text-subtle) !important;
+  filter: none;
+  opacity: 1;
+}
+
 .el-input__wrapper,
 .el-select__wrapper,
 .el-textarea__inner {
@@ -120,6 +201,12 @@ select:focus-visible {
   border-radius: var(--vh-radius-sm) !important;
   background: var(--vh-surface) !important;
   box-shadow: 0 0 0 1px var(--vh-border-strong) inset !important;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--vh-text-subtle) inset !important;
 }
 
 .el-input__wrapper.is-focus,
@@ -138,6 +225,30 @@ select:focus-visible {
 .el-input__inner::placeholder,
 .el-textarea__inner::placeholder {
   color: var(--vh-text-subtle) !important;
+}
+
+.el-form-item__label,
+.el-checkbox,
+.el-radio,
+.el-switch__label {
+  color: var(--vh-text) !important;
+}
+
+.el-switch.is-checked .el-switch__core {
+  border-color: var(--vh-action) !important;
+  background-color: var(--vh-action) !important;
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner,
+.el-checkbox__input.is-indeterminate .el-checkbox__inner,
+.el-radio__input.is-checked .el-radio__inner {
+  border-color: var(--vh-action) !important;
+  background-color: var(--vh-action) !important;
+}
+
+.el-checkbox__input.is-checked + .el-checkbox__label,
+.el-radio__input.is-checked + .el-radio__label {
+  color: var(--vh-action) !important;
 }
 
 .el-tag {
