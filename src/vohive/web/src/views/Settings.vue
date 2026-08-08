@@ -281,6 +281,8 @@ const customUpdateProxyID = 'custom'
 let updatePollTimer: number | undefined
 let updatePollStartedAt = 0
 let updatePollInFlight = false
+let updateReloadTimer: number | undefined
+let updateReloadPending = false
 
 function readStoredUpdateProxy() {
   if (typeof window === 'undefined') return 'auto'
@@ -368,6 +370,12 @@ function stopUpdatePolling() {
   }
 }
 
+function reloadPageAfterUpdate() {
+  const url = new URL(window.location.href)
+  url.searchParams.set('vohive_reload', String(Date.now()))
+  window.location.replace(url.toString())
+}
+
 function isTerminalUpdateState(state: string) {
   return state === 'success' || state === 'failed' || state === 'rolled_back'
 }
@@ -383,7 +391,18 @@ async function pollUpdateStatus(showResult = true) {
       stopUpdatePolling()
       if (res.data.state === 'success') {
         await loadSystemInfo()
-        if (showResult) ElMessage.success('更新完成，服务已恢复')
+        if (updateReloadPending) {
+          updateReloadPending = false
+          if (showResult) ElMessage.success('更新完成，正在自动刷新界面')
+          if (updateReloadTimer === undefined) {
+            updateReloadTimer = window.setTimeout(() => {
+              updateReloadTimer = undefined
+              reloadPageAfterUpdate()
+            }, 350)
+          }
+        } else if (showResult) {
+          ElMessage.success('更新完成，服务已恢复')
+        }
       } else if (showResult) {
         ElMessage.error(res.data.error || (res.data.state === 'rolled_back' ? '更新失败，已自动回滚' : '更新失败'))
       }
@@ -478,6 +497,7 @@ async function doApplyUpdate() {
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
     updateStatus.value = res.data
     ElMessage.success('更新任务已开始，请等待服务重启')
+    updateReloadPending = true
     startUpdatePolling()
   } catch (e: any) {
     if (e !== 'cancel') {
@@ -497,6 +517,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopUpdatePolling()
+  if (updateReloadTimer !== undefined) {
+    window.clearTimeout(updateReloadTimer)
+    updateReloadTimer = undefined
+  }
 })
 </script>
 

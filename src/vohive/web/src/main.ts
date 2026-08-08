@@ -12,6 +12,8 @@ import { ElLoading } from 'element-plus'
 
 let bootFinished = false
 let bootErrorOverlay: HTMLDivElement | null = null
+const chunkReloadStorageKey = 'vohive.chunk_reload_at'
+let chunkReloadScheduled = false
 
 function escapeHtml(text: string) {
   return text
@@ -46,9 +48,38 @@ function isScriptLoadErrorEvent(e: Event) {
   return t instanceof HTMLScriptElement && !!t.src
 }
 
+function cacheBustedPageURL() {
+  const url = new URL(window.location.href)
+  url.searchParams.set('vohive_reload', String(Date.now()))
+  return url.toString()
+}
+
+function scheduleChunkLoadRecovery(err: unknown) {
+  if (!isChunkLoadLikeError(err) || chunkReloadScheduled) return
+
+  let allowed = true
+  try {
+    const previous = Number(window.sessionStorage.getItem(chunkReloadStorageKey) || 0)
+    if (Number.isFinite(previous) && previous > 0 && Date.now() - previous < 30_000) {
+      allowed = false
+    } else {
+      window.sessionStorage.setItem(chunkReloadStorageKey, String(Date.now()))
+    }
+  } catch {
+    // Private browsing or restricted storage should not block the recovery.
+  }
+  if (!allowed) return
+
+  chunkReloadScheduled = true
+  window.setTimeout(() => {
+    window.location.replace(cacheBustedPageURL())
+  }, 250)
+}
+
 function showBootError(err: unknown, opts: { force?: boolean } = {}) {
   if (bootFinished && !opts.force) return
   try {
+    scheduleChunkLoadRecovery(err)
     debugCollector.recordJsError(err, 'boot')
     const text = toErrorText(err)
 
@@ -140,6 +171,17 @@ router.onError((err) => {
 
 app.mount('#app')
 bootFinished = true
+
+try {
+  window.sessionStorage.removeItem(chunkReloadStorageKey)
+  const currentURL = new URL(window.location.href)
+  if (currentURL.searchParams.has('vohive_reload')) {
+    currentURL.searchParams.delete('vohive_reload')
+    window.history.replaceState(window.history.state, '', currentURL.toString())
+  }
+} catch {
+  // A restricted history or storage API must not prevent the app from starting.
+}
 
 if ('requestIdleCallback' in window) {
   const win = window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number }
