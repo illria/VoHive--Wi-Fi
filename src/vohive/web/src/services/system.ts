@@ -84,6 +84,11 @@ export type QQSettings = {
   direct_ids: string
 }
 
+export type WecomSettings = {
+  enabled: boolean
+  webhook_url: string
+}
+
 export type WebhookSettings = {
   enabled: boolean
   urls: string[]
@@ -124,6 +129,7 @@ export type NotificationsSettingsResponse = {
   telegram?: Partial<TelegramSettings>
   feishu?: Partial<FeishuSettings>
   qq?: Partial<QQSettings>
+  wecom?: Partial<WecomSettings>
   email?: Partial<EmailSettings>
   pushplus?: Partial<PushplusSettings>
   webhook?: Partial<WebhookSettings>
@@ -151,6 +157,10 @@ export type SaveNotificationsPayload = {
     app_secret: string
     group_ids: string
     direct_ids: string
+  }
+  wecom: {
+    enabled: boolean
+    webhook_url: string
   }
   email: {
     enabled: boolean
@@ -237,6 +247,16 @@ export type TestEmailResponse = {
   message: string
 }
 
+export type TestWecomPayload = {
+  enabled: boolean
+  webhook_url: string
+}
+
+export type TestWecomResponse = {
+  ok: boolean
+  message: string
+}
+
 export const systemService = {
   getInfo() {
     return callService(async () => {
@@ -280,6 +300,12 @@ export const systemService = {
   testEmail(payload: TestEmailPayload) {
     return callService(async () => {
       const res = await api.post<TestEmailResponse>('/settings/notifications/email/test', payload)
+      return res.data
+    })
+  },
+  testWecom(payload: TestWecomPayload) {
+    return callService(async () => {
+      const res = await api.post<TestWecomResponse>('/settings/notifications/wecom/test', payload)
       return res.data
     })
   },

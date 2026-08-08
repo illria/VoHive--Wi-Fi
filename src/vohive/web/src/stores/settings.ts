@@ -11,7 +11,8 @@ import {
   type WebhookSettings,
   type BarkSettings,
   type TestBarkResponse,
-  type TestEmailResponse
+  type TestEmailResponse,
+  type TestWecomResponse
 } from '../services/system'
 
 const DEFAULT_SYSTEM_INFO: SystemInfo = {
@@ -54,6 +55,11 @@ type QQForm = {
   app_secret: string
   group_ids: string
   direct_ids: string
+}
+
+type WecomForm = {
+  enabled: boolean
+  webhook_url: string
 }
 
 type EmailForm = {
@@ -102,6 +108,11 @@ const DEFAULT_QQ_FORM: QQForm = {
   app_secret: '',
   group_ids: '',
   direct_ids: ''
+}
+
+const DEFAULT_WECOM_FORM: WecomForm = {
+  enabled: false,
+  webhook_url: ''
 }
 
 const DEFAULT_EMAIL_FORM: EmailForm = {
@@ -162,6 +173,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const telegramForm = ref<TelegramForm>({ ...DEFAULT_TELEGRAM_FORM })
   const feishuForm = ref<FeishuForm>({ ...DEFAULT_FEISHU_FORM })
   const qqForm = ref<QQForm>({ ...DEFAULT_QQ_FORM })
+  const wecomForm = ref<WecomForm>({ ...DEFAULT_WECOM_FORM })
   const webhookSettings = ref<WebhookSettings>({ ...DEFAULT_WEBHOOK_SETTINGS })
   const barkSettings = ref<BarkSettings>({ ...DEFAULT_BARK_SETTINGS })
   const emailForm = ref<EmailForm>({ ...DEFAULT_EMAIL_FORM })
@@ -173,6 +185,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const testingWebhook = ref(false)
   const testingBark = ref(false)
   const testingEmail = ref(false)
+  const testingWecom = ref(false)
   const changingPassword = ref(false)
 
   const error = ref<AppError | null>(null)
@@ -198,6 +211,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const tg = result.data.telegram || {}
       const fs = result.data.feishu || {}
       const qq = result.data.qq || {}
+      const wecom = result.data.wecom || {}
       const webhook = result.data.webhook || {}
       telegramForm.value = {
         enabled: !!tg.enabled,
@@ -219,6 +233,10 @@ export const useSettingsStore = defineStore('settings', () => {
         app_secret: qq.app_secret || '',
         group_ids: qq.group_ids || '',
         direct_ids: qq.direct_ids || ''
+      }
+      wecomForm.value = {
+        enabled: !!wecom.enabled,
+        webhook_url: wecom.webhook_url || ''
       }
       webhookSettings.value = {
         enabled: !!webhook.enabled,
@@ -297,6 +315,10 @@ export const useSettingsStore = defineStore('settings', () => {
         app_secret: qqForm.value.app_secret || '',
         group_ids: qqForm.value.group_ids || '',
         direct_ids: qqForm.value.direct_ids || ''
+      },
+      wecom: {
+        enabled: !!wecomForm.value.enabled,
+        webhook_url: String(wecomForm.value.webhook_url || '').trim()
       },
       email: {
         enabled: !!emailForm.value.enabled,
@@ -401,6 +423,20 @@ export const useSettingsStore = defineStore('settings', () => {
     return result as { ok: true; data: TestEmailResponse } | { ok: false; error: AppError }
   }
 
+  async function testWecomFromForm() {
+    testingWecom.value = true
+    const payload = {
+      enabled: !!wecomForm.value.enabled,
+      webhook_url: String(wecomForm.value.webhook_url || '').trim()
+    }
+    const result = await systemService.testWecom(payload)
+    if (!result.ok) {
+      error.value = result.error
+    }
+    testingWecom.value = false
+    return result as { ok: true; data: TestWecomResponse } | { ok: false; error: AppError }
+  }
+
   async function changePassword(payload: { old_password: string; new_password: string; confirm_password: string }) {
     changingPassword.value = true
     const result = await systemService.changePassword(payload)
@@ -426,6 +462,7 @@ export const useSettingsStore = defineStore('settings', () => {
     telegramForm,
     feishuForm,
     qqForm,
+    wecomForm,
     webhookSettings,
     barkSettings,
     emailForm,
@@ -436,6 +473,7 @@ export const useSettingsStore = defineStore('settings', () => {
     testingWebhook,
     testingBark,
     testingEmail,
+    testingWecom,
     changingPassword,
     error,
     fetchSystemInfo,
@@ -445,6 +483,7 @@ export const useSettingsStore = defineStore('settings', () => {
     testWebhookFromForm,
     testBarkFromForm,
     testEmailFromForm,
+    testWecomFromForm,
     changePassword,
     changePasswordFromForm,
     resetPasswordForm

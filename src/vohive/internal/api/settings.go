@@ -32,6 +32,10 @@ type notificationSettingsResponse struct {
 		GroupIDs  string `json:"group_ids"`
 		DirectIDs string `json:"direct_ids"`
 	} `json:"qq"`
+	Wecom struct {
+		Enabled    bool   `json:"enabled"`
+		WebhookURL string `json:"webhook_url"`
+	} `json:"wecom"`
 	Webhook struct {
 		Enabled      bool              `json:"enabled"`
 		URLs         []string          `json:"urls"`
@@ -93,6 +97,10 @@ type updateNotificationSettingsRequest struct {
 		GroupIDs  string `json:"group_ids"`
 		DirectIDs string `json:"direct_ids"`
 	} `json:"qq"`
+	Wecom struct {
+		Enabled    bool   `json:"enabled"`
+		WebhookURL string `json:"webhook_url"`
+	} `json:"wecom"`
 	Webhook struct {
 		Enabled      bool              `json:"enabled"`
 		URLs         []string          `json:"urls"`
@@ -147,6 +155,9 @@ func (s *Server) handleGetNotificationSettings(c *gin.Context) {
 	resp.QQ.AppSecret = s.fullCfg.QQ.AppSecret
 	resp.QQ.GroupIDs = s.fullCfg.QQ.GroupIDs
 	resp.QQ.DirectIDs = s.fullCfg.QQ.DirectIDs
+
+	resp.Wecom.Enabled = s.fullCfg.Wecom.Enabled
+	resp.Wecom.WebhookURL = s.fullCfg.Wecom.WebhookURL
 
 	resp.Webhook.Enabled = s.fullCfg.Webhook.Enabled
 	resp.Webhook.URLs = s.fullCfg.Webhook.URLs
@@ -215,6 +226,11 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 		AppSecret: strings.TrimSpace(req.QQ.AppSecret),
 		GroupIDs:  strings.TrimSpace(req.QQ.GroupIDs),
 		DirectIDs: strings.TrimSpace(req.QQ.DirectIDs),
+	}
+
+	wecom := config.WecomConfig{
+		Enabled:    req.Wecom.Enabled,
+		WebhookURL: strings.TrimSpace(req.Wecom.WebhookURL),
 	}
 
 	whURLs := make([]string, 0, len(req.Webhook.URLs))
@@ -299,6 +315,11 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 		}
 	}
 
+	if wecom.Enabled && wecom.WebhookURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "企业微信机器人启用时必须填写 webhook URL"})
+		return
+	}
+
 	if wh.Enabled && len(wh.URLs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "Webhook 启用时至少需要一个 URL"})
 		return
@@ -319,7 +340,7 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 		return
 	}
 
-	if err := config.UpdateNotificationInFile(s.configPath, tg, fs, qq, wh, barkCfg, em, pp); err != nil {
+	if err := config.UpdateNotificationInFile(s.configPath, tg, fs, qq, wecom, wh, barkCfg, em, pp); err != nil {
 		logger.Error("写入通知配置失败", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": "写入配置文件失败: " + err.Error()})
 		return
@@ -328,6 +349,7 @@ func (s *Server) handleUpdateNotificationSettings(c *gin.Context) {
 	s.fullCfg.Telegram = tg
 	s.fullCfg.Feishu = fs
 	s.fullCfg.QQ = qq
+	s.fullCfg.Wecom = wecom
 	s.fullCfg.Webhook = wh
 	s.fullCfg.Bark = barkCfg
 	s.fullCfg.Email = em

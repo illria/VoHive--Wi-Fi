@@ -98,6 +98,18 @@ func (m *Manager) initChannels(cfg *config.Config) error {
 		}
 	}
 
+	// 企业微信机器人渠道
+	if cfg.Wecom.Enabled {
+		wc, err := NewWecomChannel(cfg.Wecom)
+		if err != nil {
+			logger.Error("初始化企业微信机器人渠道失败", "err", err)
+			return err
+		}
+		if wc != nil {
+			m.channels = append(m.channels, wc)
+		}
+	}
+
 	// Webhook 渠道
 	if cfg.Webhook.Enabled {
 		wh, err := NewWebhookChannel(cfg.Webhook)

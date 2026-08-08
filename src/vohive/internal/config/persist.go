@@ -8,7 +8,7 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
-func UpdateNotificationInFile(path string, telegram TelegramConfig, feishu FeishuConfig, qq QQConfig, webhook WebhookConfig, bark BarkConfig, email EmailConfig, pushplus PushplusConfig) error {
+func UpdateNotificationInFile(path string, telegram TelegramConfig, feishu FeishuConfig, qq QQConfig, wecom WecomConfig, webhook WebhookConfig, bark BarkConfig, email EmailConfig, pushplus PushplusConfig) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("读取配置文件失败: %w", err)
@@ -41,6 +41,11 @@ func UpdateNotificationInFile(path string, telegram TelegramConfig, feishu Feish
 		"app_secret": qq.AppSecret,
 		"group_ids":  qq.GroupIDs,
 		"direct_ids": qq.DirectIDs,
+	}
+
+	root["wecom"] = map[string]any{
+		"enabled":     wecom.Enabled,
+		"webhook_url": wecom.WebhookURL,
 	}
 
 	root["webhook"] = map[string]any{

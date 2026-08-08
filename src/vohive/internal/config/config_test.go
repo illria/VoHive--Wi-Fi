@@ -197,6 +197,10 @@ webhook:
 			GroupIDs:  "G123",
 			DirectIDs: "U456",
 		},
+		WecomConfig{
+			Enabled:    true,
+			WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=example",
+		},
 		WebhookConfig{
 			Enabled:      true,
 			URLs:         []string{"https://example.com/webhook"},
@@ -222,6 +226,8 @@ webhook:
 		"app_secret: secret",
 		"group_ids: G123",
 		"direct_ids: U456",
+		"wecom:",
+		"webhook_url: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=example",
 		"text_template:",
 		"{{device_label}}",
 		"{{text}}",

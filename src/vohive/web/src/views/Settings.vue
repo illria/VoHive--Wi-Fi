@@ -17,7 +17,7 @@ import {
 } from '@vicons/fluent'
 
 const settingsStore = useSettingsStore()
-const { systemInfo, loadingNotifications, savingNotifications, testingWebhook, testingBark, testingEmail, changingPassword, passwordForm, telegramForm, feishuForm, qqForm, webhookSettings, barkSettings, emailForm, pushplusForm } = storeToRefs(settingsStore)
+const { systemInfo, loadingNotifications, savingNotifications, testingWebhook, testingBark, testingEmail, testingWecom, changingPassword, passwordForm, telegramForm, feishuForm, qqForm, wecomForm, webhookSettings, barkSettings, emailForm, pushplusForm } = storeToRefs(settingsStore)
 const activeNotifyTab = ref('telegram')
 
 
@@ -45,6 +45,10 @@ const hasValidEmailConfig = computed(() => {
     emailForm.value.from_address &&
     emailForm.value.to_addresses
   )
+})
+
+const hasValidWecomWebhook = computed(() => {
+  return String(wecomForm.value.webhook_url || '').trim().length > 0
 })
 
 
@@ -225,6 +229,23 @@ async function testEmailNotification() {
     ElMessage.error(data.message || 'Email 测试失败')
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : 'Email 测试失败')
+  }
+}
+
+async function testWecomNotification() {
+  try {
+    const result = await settingsStore.testWecomFromForm()
+    if (!result.ok) {
+      throw new Error(result.error.message || '企业微信机器人测试失败')
+    }
+    const data = result.data
+    if (data.ok) {
+      ElMessage.success(data.message || '企业微信机器人测试通知已发送')
+      return
+    }
+    ElMessage.error(data.message || '企业微信机器人测试失败')
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '企业微信机器人测试失败')
   }
 }
 
@@ -664,7 +685,7 @@ onBeforeUnmount(() => {
                </div>
                <div>
                   <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100">通知</h3>
-                  <p class="text-xs text-gray-500">Telegram / 飞书 / QQ / Webhook</p>
+                  <p class="text-xs text-gray-500">Telegram / 飞书 / 企业微信 / QQ / Webhook</p>
                </div>
             </div>
             <el-button type="primary" :loading="savingNotifications" :disabled="loadingNotifications" @click="saveNotifications" class="!border-0">
@@ -746,6 +767,45 @@ onBeforeUnmount(() => {
                       <li>在「事件与回调 → 事件配置」中选择「使用长连接接收事件」</li>
                       <li>添加 <code>im:message</code> 和 <code>im:message:send_as_bot</code> 权限</li>
                     </ol>
+                  </div>
+                </div>
+              </el-tab-pane>
+
+              <!-- 企业微信机器人 -->
+              <el-tab-pane label="企业微信" name="wecom" class="pt-2">
+                <div class="flex items-center justify-between mb-4">
+                  <div class="flex items-center gap-2">
+                    <div class="font-bold text-gray-800 dark:text-gray-100">启用企业微信机器人</div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      :loading="testingWecom"
+                      :disabled="!wecomForm.enabled || !hasValidWecomWebhook"
+                      @click="testWecomNotification"
+                    >
+                      测试通知
+                    </el-button>
+                    <el-switch v-model="wecomForm.enabled" />
+                  </div>
+                </div>
+
+                <div class="space-y-4">
+                  <div class="space-y-1">
+                    <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">Webhook URL</label>
+                    <el-input
+                      v-model="wecomForm.webhook_url"
+                      :disabled="!wecomForm.enabled"
+                      type="password"
+                      show-password
+                      placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY"
+                    />
+                    <div class="text-[10px] text-gray-400 mt-1">在企业微信群中添加群机器人后复制 Webhook 地址。地址包含密钥，请勿公开发布。</div>
+                  </div>
+                  <div class="p-3 rounded-xl bg-green-50/50 dark:bg-green-500/5 text-xs text-green-700 dark:text-green-400/80 leading-relaxed border border-green-100/50 dark:border-green-500/10">
+                    企业微信机器人只支持向群聊推送消息，不接收命令。保存配置后，短信、IP 切换、来电等系统通知会发送到该群。
                   </div>
                 </div>
               </el-tab-pane>

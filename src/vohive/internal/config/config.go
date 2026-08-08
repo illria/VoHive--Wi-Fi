@@ -73,6 +73,7 @@ type Config struct {
 	Telegram TelegramConfig `mapstructure:"telegram"`
 	Feishu   FeishuConfig   `mapstructure:"feishu"`
 	QQ       QQConfig       `mapstructure:"qq"`
+	Wecom    WecomConfig    `mapstructure:"wecom"`
 	Webhook  WebhookConfig  `mapstructure:"webhook"`
 
 	Bark     BarkConfig     `mapstructure:"bark"`
@@ -321,6 +322,12 @@ type QQConfig struct {
 	AppSecret string `mapstructure:"app_secret"`
 	GroupIDs  string `mapstructure:"group_ids"`  // 逗号分隔的群组 OpenID
 	DirectIDs string `mapstructure:"direct_ids"` // 逗号分隔的私聊 OpenID
+}
+
+// WecomConfig 企业微信群机器人配置。
+type WecomConfig struct {
+	Enabled    bool   `mapstructure:"enabled"`
+	WebhookURL string `mapstructure:"webhook_url"`
 }
 
 type WebhookConfig struct {
