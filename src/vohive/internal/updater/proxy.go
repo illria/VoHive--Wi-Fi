@@ -96,15 +96,19 @@ func proxyCandidates(proxyID string) ([]githubProxy, bool) {
 func proxyCandidatesWithURL(proxyID, customURL string) ([]githubProxy, error) {
 	proxyID = normalizeProxyID(proxyID)
 	if proxyID == ProxyCustom {
-		prefix, socks5Addr, err := parseCustomProxyURL(customURL)
+		normalized, socks5Addr, err := parseCustomProxyURL(customURL)
 		if err != nil {
 			return nil, newUpdateError(ErrInvalidGitHubProxy, "自定义 GitHub 加速地址无效", err)
+		}
+		prefix := normalized
+		if socks5Addr != "" {
+			prefix = ""
 		}
 		return []githubProxy{{
 			ProxyOption: ProxyOption{
 				ID:          ProxyCustom,
 				Name:        customProxyName,
-				Description: prefix,
+				Description: normalized,
 			},
 			prefix:     prefix,
 			socks5Addr: socks5Addr,
