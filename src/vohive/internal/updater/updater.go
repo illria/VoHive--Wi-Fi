@@ -29,6 +29,10 @@ const (
 
 	defaultAPIBaseURL      = "https://api.github.com"
 	defaultRequestTimeout  = 20 * time.Second
+	// Release metadata should fail fast when an endpoint is unavailable, but a
+	// large binary may legitimately take longer than that to arrive through a
+	// public proxy. Keep a separate upper bound for the complete binary body.
+	defaultDownloadTimeout = 10 * time.Minute
 	defaultSignalDelay     = 2 * time.Second
 	defaultMinimumFileSize = 64 * 1024
 	defaultMaximumFileSize = 128 * 1024 * 1024
@@ -164,7 +168,8 @@ type Options struct {
 	Channel         Channel
 	AllowPrerelease bool
 	APIBaseURL      string
-	HTTPClient      *http.Client
+	HTTPClient         *http.Client
+	DownloadHTTPClient *http.Client
 	Executable      func() (string, error)
 	Signal          func(os.Signal) error
 	IsDocker        func() bool
@@ -185,7 +190,8 @@ type Manager struct {
 	channel         Channel
 	allowPrerelease bool
 	apiBaseURL      string
-	httpClient      *http.Client
+	httpClient         *http.Client
+	downloadHTTPClient *http.Client
 	executable      func() (string, error)
 	signal          func(os.Signal) error
 	isDocker        func() bool
@@ -210,6 +216,13 @@ func NewManager(options Options) *Manager {
 	}
 	if options.HTTPClient == nil {
 		options.HTTPClient = &http.Client{Timeout: defaultRequestTimeout}
+	}
+	if options.DownloadHTTPClient == nil {
+		// Preserve the caller's transport, redirect policy and cookie jar while
+		// removing the short metadata deadline from binary body reads.
+		downloadClient := *options.HTTPClient
+		downloadClient.Timeout = defaultDownloadTimeout
+		options.DownloadHTTPClient = &downloadClient
 	}
 	if options.Executable == nil {
 		options.Executable = os.Executable
@@ -248,7 +261,8 @@ func NewManager(options Options) *Manager {
 		channel:         options.Channel,
 		allowPrerelease: options.AllowPrerelease,
 		apiBaseURL:      strings.TrimRight(options.APIBaseURL, "/"),
-		httpClient:      options.HTTPClient,
+		httpClient:         options.HTTPClient,
+		downloadHTTPClient: options.DownloadHTTPClient,
 		executable:      options.Executable,
 		signal:          options.Signal,
 		isDocker:        options.IsDocker,
@@ -698,7 +712,7 @@ func (m *Manager) downloadBinaryWithProxy(asset Asset, directory, targetVersion 
 	}
 	request.Header.Set("Accept", "application/octet-stream")
 	request.Header.Set("User-Agent", "VoHive-Updater")
-	response, err := m.httpClient.Do(request)
+	response, err := m.downloadHTTPClient.Do(request)
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "下载二进制失败", err)
 	}

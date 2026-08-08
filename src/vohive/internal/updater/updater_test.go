@@ -283,8 +283,35 @@ func TestDownloadRejectsHTTPTimeoutAndEmpty(t *testing.T) {
 		t.Fatalf("expected download_failed for empty file, got %v", err)
 	}
 	manager.httpClient = &http.Client{Timeout: time.Millisecond}
+	manager.downloadHTTPClient = &http.Client{Timeout: time.Millisecond}
 	if _, err := manager.downloadBinary(Asset{BrowserDownloadURL: server.URL + "/slow"}, t.TempDir(), "v1.2.0"); ErrorCodeOf(err) != string(ErrDownloadFailed) {
 		t.Fatalf("expected download_failed for timeout, got %v", err)
+	}
+}
+
+func TestDownloadBinaryUsesSeparateDownloadTimeout(t *testing.T) {
+	payload := bytesForTest(4096)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = writer.Write(payload)
+	}))
+	defer server.Close()
+
+	manager := newTestManager(t, server.URL, nil, nil)
+	manager.httpClient = &http.Client{Timeout: 10 * time.Millisecond}
+	manager.downloadHTTPClient = &http.Client{Timeout: time.Second}
+	path, err := manager.downloadBinary(Asset{BrowserDownloadURL: server.URL}, t.TempDir(), "v1.2.0")
+	if err != nil {
+		t.Fatalf("downloadBinary should use the separate download client: %v", err)
+	}
+	defer os.Remove(path)
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("downloaded payload differs: got %d bytes, want %d", len(got), len(payload))
 	}
 }
 
