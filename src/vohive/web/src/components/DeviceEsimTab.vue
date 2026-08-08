@@ -121,7 +121,7 @@ function barcodeDetectorConstructor(): BarcodeDetectorConstructor | null {
 async function detectQrPayloadWithBarcodeDetector(file: File, Detector: BarcodeDetectorConstructor): Promise<string> {
   const detector = new Detector({ formats: ['qr_code'] })
   if (typeof createImageBitmap === 'function') {
-    const bitmap = await createImageBitmap(file)
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
     try {
       const results = await detector.detect(bitmap)
       return results.find((item) => item.rawValue?.trim())?.rawValue?.trim() || ''
@@ -145,42 +145,156 @@ async function detectQrPayloadWithBarcodeDetector(file: File, Detector: BarcodeD
   }
 }
 
-async function detectQrPayloadWithJsQr(file: File): Promise<string> {
+type QrImageSource = HTMLImageElement | ImageBitmap
+type QrImageHandle = {
+  source: QrImageSource
+  width: number
+  height: number
+  close: () => void
+}
+
+function isHeicFile(file: File): boolean {
+  return /image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)
+}
+
+async function loadQrImage(file: File): Promise<QrImageHandle> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+      if (bitmap.width > 0 && bitmap.height > 0) {
+        return {
+          source: bitmap,
+          width: bitmap.width,
+          height: bitmap.height,
+          close: () => bitmap.close()
+        }
+      }
+      bitmap.close()
+    } catch {
+      // Safari and some Android browsers expose createImageBitmap but cannot
+      // decode every image format. Fall back to an ordinary HTML image.
+    }
+  }
+
   const objectUrl = URL.createObjectURL(file)
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
       const element = new Image()
+      element.decoding = 'async'
       element.onload = () => resolve(element)
       element.onerror = () => reject(new Error('无法读取二维码图片'))
       element.src = objectUrl
     })
-    const sourceWidth = image.naturalWidth || image.width
-    const sourceHeight = image.naturalHeight || image.height
-    if (!sourceWidth || !sourceHeight) {
+    const width = image.naturalWidth || image.width
+    const height = image.naturalHeight || image.height
+    if (!width || !height) {
       throw new Error('二维码图片尺寸无效')
     }
-
-    // Very large phone screenshots can make a pure-JS decoder slow. Keep enough
-    // detail for small QR modules while bounding the amount of pixel work.
-    const maxDimension = 2400
-    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight))
-    const width = Math.max(1, Math.round(sourceWidth * scale))
-    const height = Math.max(1, Math.round(sourceHeight * scale))
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const context = canvas.getContext('2d', { willReadFrequently: true })
-    if (!context) {
-      throw new Error('当前浏览器无法读取图片像素')
+    return {
+      source: image,
+      width,
+      height,
+      close: () => URL.revokeObjectURL(objectUrl)
     }
-    context.fillStyle = '#ffffff'
-    context.fillRect(0, 0, width, height)
-    context.drawImage(image, 0, 0, width, height)
-    const imageData = context.getImageData(0, 0, width, height)
-    const result = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' })
-    return result?.data?.trim() || ''
-  } finally {
+  } catch (error) {
     URL.revokeObjectURL(objectUrl)
+    throw error
+  }
+}
+
+function decodeQrImageData(imageData: ImageData, width: number, height: number): string {
+  const result = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' })
+  if (result?.data?.trim()) return result.data.trim()
+
+  // A phone photo may have a very bright background or low contrast. A single
+  // high-contrast pass costs little and helps jsQR when the original pixels
+  // contain shadows, glare, or light grey QR modules.
+  const thresholded = new Uint8ClampedArray(imageData.data.length)
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const luminance = Math.round(
+      imageData.data[index] * 0.299 +
+      imageData.data[index + 1] * 0.587 +
+      imageData.data[index + 2] * 0.114
+    )
+    const value = luminance < 160 ? 0 : 255
+    thresholded[index] = value
+    thresholded[index + 1] = value
+    thresholded[index + 2] = value
+    thresholded[index + 3] = 255
+  }
+  const thresholdedResult = jsQR(thresholded, width, height, { inversionAttempts: 'attemptBoth' })
+  return thresholdedResult?.data?.trim() || ''
+}
+
+type QrCrop = {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+function decodeQrAtSize(
+  source: QrImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  maxDimension: number,
+  crop?: QrCrop
+): string {
+  const region = crop || { left: 0, top: 0, width: sourceWidth, height: sourceHeight }
+  const scale = Math.min(1, maxDimension / Math.max(region.width, region.height))
+  const width = Math.max(1, Math.round(region.width * scale))
+  const height = Math.max(1, Math.round(region.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    throw new Error('当前浏览器无法读取图片像素')
+  }
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, width, height)
+  context.drawImage(source, region.left, region.top, region.width, region.height, 0, 0, width, height)
+  return decodeQrImageData(context.getImageData(0, 0, width, height), width, height)
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve())
+    } else {
+      window.setTimeout(resolve, 0)
+    }
+  })
+}
+
+async function detectQrPayloadWithJsQr(file: File): Promise<string> {
+  const image = await loadQrImage(file)
+  try {
+    const { source, width, height } = image
+    const attempts: Array<{ maxDimension: number; crop?: QrCrop }> = [
+      { maxDimension: 3200 },
+      { maxDimension: 2400 },
+      {
+        maxDimension: 2400,
+        crop: {
+          left: width * 0.1,
+          top: height * 0.1,
+          width: width * 0.8,
+          height: height * 0.8
+        }
+      },
+      { maxDimension: 1600 }
+    ]
+
+    for (const attempt of attempts) {
+      const payload = decodeQrAtSize(source, width, height, attempt.maxDimension, attempt.crop)
+      if (payload) return payload
+      // Keep the page responsive while trying additional resolutions on a phone.
+      await yieldToBrowser()
+    }
+    return ''
+  } finally {
+    image.close()
   }
 }
 
@@ -201,18 +315,23 @@ async function detectQrPayload(file: File): Promise<QrDetectionResult> {
     }
   }
 
+  let fallbackError: unknown = null
   try {
     const payload = await detectQrPayloadWithJsQr(file)
     if (payload) return { payload, usedFallback: true }
-  } catch {
+  } catch (error: unknown) {
+    fallbackError = error
     // The user-facing error below also covers browsers with restricted canvas
     // access or images that cannot be decoded by the fallback.
   }
 
-  if (!Detector) {
-    throw new Error('当前浏览器不支持原生图片二维码识别，兼容识别也未读取到二维码；请上传清晰图片或直接粘贴 LPA 激活码')
+  if (isHeicFile(file)) {
+    throw new Error('手机选择的是 HEIC/HEIF 图片，当前浏览器无法稳定读取该格式；请将二维码导出或截图为 JPG/PNG 后再上传，也可以直接粘贴 LPA 激活码')
   }
-  throw new Error('图片中没有识别到二维码，请上传清晰的二维码图片或直接粘贴 LPA 激活码')
+  if (fallbackError instanceof Error && fallbackError.message === '当前浏览器无法读取图片像素') {
+    throw new Error('当前浏览器无法读取图片像素；请改用 JPG/PNG 图片，或直接粘贴 LPA 激活码')
+  }
+  throw new Error('兼容二维码识别未读取到二维码；请上传完整、清晰的 JPG/PNG 图片，确保二维码四周留有白边，或直接粘贴 LPA 激活码')
 }
 
 function openQrPicker() {
@@ -1016,14 +1135,14 @@ onBeforeUnmount(() => {
           </div>
           <div>
             <div class="text-sm font-bold text-gray-900 dark:text-white">下载新 Profile</div>
-            <div class="text-[11px] text-gray-400 dark:text-gray-500">上传 eSIM 二维码，自动读取 LPA 激活信息（不支持原生识别时自动使用兼容模式）</div>
+            <div class="text-[11px] text-gray-400 dark:text-gray-500">上传 eSIM 二维码，自动读取 LPA 激活信息（手机端自动使用兼容识别；建议 JPG/PNG）</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
           <input
             ref="qrInput"
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
             class="hidden"
             @change="handleQrFileChange"
           />
