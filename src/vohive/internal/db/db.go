@@ -150,6 +150,7 @@ func Init(dbPath string) error {
 		&SIMCard{},
 		&SIMSubscription{},
 		&PendingPhoneNumber{},
+		&EsimProfileNote{},
 		&ProxyInstance{},
 		&UpstreamProxy{},
 		&UpstreamProxyCountryRule{},

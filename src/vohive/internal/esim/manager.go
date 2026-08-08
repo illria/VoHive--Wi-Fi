@@ -239,6 +239,7 @@ type ProfileItem struct {
 	State               int    `json:"state"` // 0=disabled, 1=enabled
 	StateText           string `json:"state_text"`
 	ClassText           string `json:"class_text,omitempty"`
+	Note                string `json:"note,omitempty"`
 }
 
 // EUICCProfiles 按 eUICC 分组的 profile 列表

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,11 +32,16 @@ const (
 	defaultRequestTimeout  = 20 * time.Second
 	// Release metadata should fail fast when an endpoint is unavailable, but a
 	// large binary may legitimately take longer than that to arrive through a
-	// public proxy. Keep a separate upper bound for the complete binary body.
-	defaultDownloadTimeout = 10 * time.Minute
-	defaultSignalDelay     = 2 * time.Second
-	defaultMinimumFileSize = 64 * 1024
-	defaultMaximumFileSize = 128 * 1024 * 1024
+	// public proxy. The download request has no whole-body client timeout; this
+	// is the per-attempt upper bound, while idleDownloadReader handles a stalled
+	// body without interrupting an otherwise slow but active transfer.
+	defaultDownloadTimeout      = 30 * time.Minute
+	defaultDownloadIdleTimeout  = 60 * time.Second
+	defaultDownloadRetryAttempts = 4
+	defaultDownloadRetryDelay   = 500 * time.Millisecond
+	defaultSignalDelay          = 2 * time.Second
+	defaultMinimumFileSize      = 64 * 1024
+	defaultMaximumFileSize      = 128 * 1024 * 1024
 )
 
 type Channel string
@@ -219,9 +225,10 @@ func NewManager(options Options) *Manager {
 	}
 	if options.DownloadHTTPClient == nil {
 		// Preserve the caller's transport, redirect policy and cookie jar while
-		// removing the short metadata deadline from binary body reads.
+		// removing the short metadata deadline from binary body reads. A total
+		// http.Client timeout aborts slow transfers even when bytes keep arriving.
 		downloadClient := *options.HTTPClient
-		downloadClient.Timeout = defaultDownloadTimeout
+		downloadClient.Timeout = 0
 		options.DownloadHTTPClient = &downloadClient
 	}
 	if options.Executable == nil {
@@ -706,21 +713,7 @@ func (m *Manager) downloadBinary(asset Asset, directory, targetVersion string) (
 }
 
 func (m *Manager) downloadBinaryWithProxy(asset Asset, directory, targetVersion string, proxy githubProxy) (string, error) {
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rewriteGitHubURL(proxy, asset.BrowserDownloadURL), nil)
-	if err != nil {
-		return "", newUpdateError(ErrDownloadFailed, "创建二进制下载请求失败", err)
-	}
-	request.Header.Set("Accept", "application/octet-stream")
-	request.Header.Set("User-Agent", "VoHive-Updater")
-	response, err := m.downloadHTTPClient.Do(request)
-	if err != nil {
-		return "", newUpdateError(ErrDownloadFailed, "下载二进制失败", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", newUpdateError(ErrDownloadFailed, fmt.Sprintf("二进制下载返回 HTTP %d", response.StatusCode), nil)
-	}
-	if response.ContentLength > m.maxBinarySize {
+	if asset.Size > m.maxBinarySize {
 		return "", newUpdateError(ErrDownloadFailed, "二进制超过允许的最大下载大小", nil)
 	}
 
@@ -729,36 +722,249 @@ func (m *Manager) downloadBinaryWithProxy(asset Asset, directory, targetVersion 
 		return "", newUpdateError(ErrDownloadFailed, "创建二进制临时文件失败", err)
 	}
 	path := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", newUpdateError(ErrDownloadFailed, "关闭二进制临时文件失败", err)
+	}
 	removeTemporary := true
 	defer func() {
-		temporary.Close()
 		if removeTemporary {
-			os.Remove(path)
+			_ = os.Remove(path)
 		}
 	}()
 
-	writer := &progressWriter{manager: m, writer: temporary, total: response.ContentLength, target: targetVersion}
-	bytesWritten, err := io.Copy(writer, io.LimitReader(response.Body, m.maxBinarySize+1))
+	var lastErr error
+	for attempt := 1; attempt <= defaultDownloadRetryAttempts; attempt++ {
+		offset, statErr := fileSize(path)
+		if statErr != nil {
+			return "", newUpdateError(ErrDownloadFailed, "读取二进制临时文件状态失败", statErr)
+		}
+		if offset > m.maxBinarySize {
+			return "", newUpdateError(ErrDownloadFailed, "二进制超过允许的最大下载大小", nil)
+		}
+
+		err := m.downloadBinaryAttempt(asset, path, offset, targetVersion, proxy)
+		if err == nil {
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				return "", newUpdateError(ErrDownloadFailed, "读取已下载二进制状态失败", statErr)
+			}
+			if info.Size() > m.maxBinarySize {
+				return "", newUpdateError(ErrDownloadFailed, "二进制超过允许的最大下载大小", nil)
+			}
+			if asset.Size > 0 && info.Size() != asset.Size {
+				lastErr = newUpdateError(ErrDownloadFailed, "二进制下载不完整", io.ErrUnexpectedEOF)
+			} else if info.Size() < m.minBinarySize {
+				lastErr = newUpdateError(ErrDownloadFailed, "下载文件过小，拒绝替换当前程序", nil)
+			} else if err := os.Chmod(path, 0o755); err != nil {
+				lastErr = newUpdateError(ErrDownloadFailed, "设置更新文件权限失败", err)
+			} else {
+				file, openErr := os.OpenFile(path, os.O_WRONLY, 0)
+				if openErr != nil {
+					lastErr = newUpdateError(ErrDownloadFailed, "打开已下载二进制失败", openErr)
+				} else {
+					syncErr := file.Sync()
+					closeErr := file.Close()
+					if syncErr != nil {
+						lastErr = newUpdateError(ErrDownloadFailed, "同步更新文件失败", syncErr)
+					} else if closeErr != nil {
+						lastErr = newUpdateError(ErrDownloadFailed, "关闭更新文件失败", closeErr)
+					} else {
+						removeTemporary = false
+						return path, nil
+					}
+				}
+			}
+		} else {
+			lastErr = err
+		}
+
+		if attempt == defaultDownloadRetryAttempts {
+			break
+		}
+		progress := 0
+		if size, sizeErr := fileSize(path); sizeErr == nil && asset.Size > 0 {
+			progress = int((size * 100) / asset.Size)
+			if progress > 99 {
+				progress = 99
+			}
+		}
+		m.setState(StateDownloading, progress,
+			fmt.Sprintf("下载中断，正在保留进度重试（%d/%d）", attempt, defaultDownloadRetryAttempts), targetVersion)
+		time.Sleep(defaultDownloadRetryDelay)
+	}
+	if lastErr == nil {
+		lastErr = newUpdateError(ErrDownloadFailed, "下载二进制失败", nil)
+	}
+	return "", lastErr
+}
+
+// downloadBinaryAttempt downloads one response into path. A failed body read
+// intentionally leaves the partial file in place so the next attempt can use
+// HTTP Range against the same pinned GitHub entry.
+func (m *Manager) downloadBinaryAttempt(asset Asset, path string, offset int64, targetVersion string, proxy githubProxy) error {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDownloadTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rewriteGitHubURL(proxy, asset.BrowserDownloadURL), nil)
 	if err != nil {
-		return "", newUpdateError(ErrDownloadFailed, "写入二进制临时文件失败", err)
+		return newUpdateError(ErrDownloadFailed, "创建二进制下载请求失败", err)
 	}
-	if bytesWritten > m.maxBinarySize {
-		return "", newUpdateError(ErrDownloadFailed, "二进制超过允许的最大下载大小", nil)
+	request.Header.Set("Accept", "application/octet-stream")
+	request.Header.Set("Accept-Encoding", "identity")
+	request.Header.Set("User-Agent", "VoHive-Updater")
+	if offset > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	if bytesWritten < m.minBinarySize {
-		return "", newUpdateError(ErrDownloadFailed, "下载文件过小，拒绝替换当前程序", nil)
+
+	response, err := m.downloadHTTPClient.Do(request)
+	if err != nil {
+		return newUpdateError(ErrDownloadFailed, "下载二进制失败", err)
 	}
-	if err := temporary.Chmod(0o755); err != nil {
-		return "", newUpdateError(ErrDownloadFailed, "设置更新文件权限失败", err)
+	defer response.Body.Close()
+
+	startOffset := offset
+	total := asset.Size
+	if offset > 0 {
+		switch response.StatusCode {
+		case http.StatusPartialContent:
+			start, rangeTotal, ok := parseContentRange(response.Header.Get("Content-Range"))
+			if response.Header.Get("Content-Range") != "" && (!ok || start != offset) {
+				return newUpdateError(ErrDownloadFailed, "断点续传返回的 Content-Range 无效", nil)
+			}
+			if rangeTotal > 0 {
+				total = rangeTotal
+			}
+		case http.StatusOK:
+			// The endpoint ignored Range. Restart this response from byte zero;
+			// do not append a second copy of the binary.
+			startOffset = 0
+		default:
+			return newUpdateError(ErrDownloadFailed, fmt.Sprintf("断点续传返回 HTTP %d", response.StatusCode), nil)
+		}
+	} else if response.StatusCode != http.StatusOK {
+		return newUpdateError(ErrDownloadFailed, fmt.Sprintf("二进制下载返回 HTTP %d", response.StatusCode), nil)
 	}
-	if err := temporary.Sync(); err != nil {
-		return "", newUpdateError(ErrDownloadFailed, "同步更新文件失败", err)
+
+	if total <= 0 && response.ContentLength > 0 {
+		total = startOffset + response.ContentLength
 	}
-	if err := temporary.Close(); err != nil {
-		return "", newUpdateError(ErrDownloadFailed, "关闭更新文件失败", err)
+	if total > m.maxBinarySize || (response.ContentLength > 0 && startOffset+response.ContentLength > m.maxBinarySize) {
+		return newUpdateError(ErrDownloadFailed, "二进制超过允许的最大下载大小", nil)
 	}
-	removeTemporary = false
-	return path, nil
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return newUpdateError(ErrDownloadFailed, "打开二进制临时文件失败", err)
+	}
+	closeFile := true
+	defer func() {
+		if closeFile {
+			_ = file.Close()
+		}
+	}()
+	if err := file.Truncate(startOffset); err != nil {
+		return newUpdateError(ErrDownloadFailed, "准备二进制临时文件失败", err)
+	}
+	if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+		return newUpdateError(ErrDownloadFailed, "定位二进制临时文件失败", err)
+	}
+
+	writer := &progressWriter{
+		manager: m,
+		writer:  file,
+		total:   total,
+		target:  targetVersion,
+		written: startOffset,
+	}
+	reader := &idleTimeoutReader{body: response.Body, timeout: defaultDownloadIdleTimeout}
+	_, copyErr := io.Copy(writer, io.LimitReader(reader, m.maxBinarySize-startOffset+1))
+	if err := file.Sync(); err != nil && copyErr == nil {
+		copyErr = err
+	}
+	if err := file.Close(); err != nil && copyErr == nil {
+		copyErr = err
+	}
+	closeFile = false
+	if copyErr != nil {
+		return newUpdateError(ErrDownloadFailed, "写入二进制临时文件失败", copyErr)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return newUpdateError(ErrDownloadFailed, "读取已下载二进制状态失败", err)
+	}
+	if info.Size() > m.maxBinarySize {
+		return newUpdateError(ErrDownloadFailed, "二进制超过允许的最大下载大小", nil)
+	}
+	if total > 0 && info.Size() < total {
+		return newUpdateError(ErrDownloadFailed, "二进制下载不完整", io.ErrUnexpectedEOF)
+	}
+	return nil
+}
+
+type idleTimeoutReader struct {
+	body    io.ReadCloser
+	timeout time.Duration
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	type readResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		n, err := r.body.Read(p)
+		resultCh <- readResult{n: n, err: err}
+	}()
+
+	timer := time.NewTimer(r.timeout)
+	defer timer.Stop()
+	select {
+	case result := <-resultCh:
+		return result.n, result.err
+	case <-timer.C:
+		_ = r.body.Close()
+		return 0, context.DeadlineExceeded
+	}
+}
+
+func (r *idleTimeoutReader) Close() error { return r.body.Close() }
+
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+func parseContentRange(value string) (start, total int64, ok bool) {
+	value = strings.TrimSpace(value)
+	if !strings.HasPrefix(value, "bytes ") {
+		return 0, 0, false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, "bytes "), "/", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	span := strings.SplitN(parts[0], "-", 2)
+	if len(span) != 2 {
+		return 0, 0, false
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(span[0]), 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, false
+	}
+	totalText := strings.TrimSpace(parts[1])
+	if totalText == "*" {
+		return start, 0, true
+	}
+	total, err = strconv.ParseInt(totalText, 10, 64)
+	if err != nil || total <= 0 {
+		return 0, 0, false
+	}
+	return start, total, true
 }
 
 type progressWriter struct {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -315,6 +316,69 @@ func TestDownloadBinaryUsesSeparateDownloadTimeout(t *testing.T) {
 	}
 }
 
+func TestDownloadBinaryResumesAfterBodyReadFailure(t *testing.T) {
+	payload := bytesForTest(256)
+	cutoff := 73
+	requests := 0
+	manager := newTestManager(t, "http://updater.test", nil, nil)
+	manager.downloadHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		start := int64(0)
+		if value := strings.TrimSpace(request.Header.Get("Range")); value != "" {
+			const prefix = "bytes="
+			if !strings.HasPrefix(value, prefix) {
+				t.Fatalf("unexpected Range header %q", value)
+			}
+			var err error
+			start, err = strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(value, prefix), "-"), 10, 64)
+			if err != nil {
+				t.Fatalf("parse Range %q: %v", value, err)
+			}
+		}
+
+		if start == 0 {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Status:        "200 OK",
+				Header:        make(http.Header),
+				Body:          &failAfterReader{data: payload[:cutoff]},
+				ContentLength: int64(len(payload)),
+				Request:       request,
+			}, nil
+		}
+		if start != int64(cutoff) {
+			t.Fatalf("resume offset=%d, want=%d", start, cutoff)
+		}
+		body := payload[cutoff:]
+		header := make(http.Header)
+		header.Set("Content-Range", "bytes "+strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(int64(len(payload)-1), 10)+"/"+strconv.FormatInt(int64(len(payload)), 10))
+		return &http.Response{
+			StatusCode:    http.StatusPartialContent,
+			Status:        "206 Partial Content",
+			Header:        header,
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       request,
+		}, nil
+	})}
+
+	path, err := manager.downloadBinary(Asset{BrowserDownloadURL: "http://updater.test/binary", Size: int64(len(payload))}, t.TempDir(), "v1.2.0")
+	if err != nil {
+		t.Fatalf("downloadBinary returned error: %v", err)
+	}
+	defer os.Remove(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("resumed payload differs: got %d bytes, want %d", len(got), len(payload))
+	}
+	if requests != 2 {
+		t.Fatalf("request count=%d, want 2", requests)
+	}
+}
+
 func TestDownloadChecksumAndVerify(t *testing.T) {
 	payload := []byte("checksum-payload")
 	digest := sha256.Sum256(payload)
@@ -595,6 +659,22 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
 }
+
+type failAfterReader struct {
+	data []byte
+	read bool
+}
+
+func (r *failAfterReader) Read(p []byte) (int, error) {
+	if !r.read {
+		r.read = true
+		copy(p, r.data)
+		return len(r.data), nil
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (r *failAfterReader) Close() error { return nil }
 
 func bytesForTest(size int) []byte {
 	payload := make([]byte, size)

@@ -366,6 +366,7 @@ type deviceMgmtOverviewLiteItem struct {
 	LocalPhone             string             `json:"local_phone,omitempty"`
 	E911SetupAvailable     bool               `json:"e911_setup_available,omitempty"`
 	ActiveESIMProfileName  string             `json:"active_esim_profile_name,omitempty"`
+	EsimNote               string             `json:"esim_note,omitempty"`
 	SMSEnabled             bool               `json:"sms_enabled"`
 	NetworkEnabled         bool               `json:"network_enabled"`
 	VoWiFiEnabled          bool               `json:"vowifi_enabled"`
@@ -614,6 +615,9 @@ func (s *Server) buildOverviewLiteItemFromWorkerWithModem(w *device.Worker, cfg 
 		if name, err := w.EsimMgr.ActiveProfileName(); err == nil {
 			item.ActiveESIMProfileName = name
 		}
+	}
+	if note, err := db.GetEsimProfileNote(strings.TrimSpace(status.ICCID)); err == nil {
+		item.EsimNote = note
 	}
 	s.applyLifecycleToOverviewLiteItem(&item, w, cfg)
 	return item
@@ -1706,6 +1710,7 @@ func (s *Server) handleEsimListProfiles(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	enrichEsimProfileNotes(profiles)
 	c.JSON(http.StatusOK, profiles)
 }
 
@@ -2028,6 +2033,7 @@ func (s *Server) handleEsimGetOverview(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	enrichEsimProfileNotes(overview.Profiles)
 
 	c.JSON(http.StatusOK, overview)
 }
@@ -2168,6 +2174,7 @@ func (s *Server) handleEsimDeleteProfile(c *gin.Context) {
 		return
 	}
 
+	_ = db.DeleteEsimProfileNote(iccid)
 	writeEsimDeleteSuccessJSON(c, result)
 }
 

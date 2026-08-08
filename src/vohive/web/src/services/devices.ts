@@ -382,6 +382,12 @@ export const devicesService = {
       return true
     })
   },
+  updateEsimProfileNote(id: string, iccid: string, note: string) {
+    return callService(async () => {
+      await withEsimBusyRetry(() => api.patch(`/devices/${id}/esim/profiles/${iccid}/note`, { note }))
+      return true
+    })
+  },
   deleteEsimProfile(id: string, iccid: string, aidHex: string) {
     return callService(async () => {
       const res = await withEsimBusyRetry(() => api.delete<DeleteEsimProfileResponse>(`/devices/${id}/esim/profiles/${iccid}`, {

@@ -320,6 +320,7 @@ func (s *Server) newRouter() *gin.Engine {
 		api.GET("/devices/:device_id/esim/eids", s.handleEsimGetEID)                                              // 获取 EID
 		api.GET("/devices/:device_id/esim/chip-info", s.handleEsimGetChipInfo)                                    // 获取 eUICC 芯片信息
 		api.GET("/devices/:device_id/esim/actions/download", s.handleEsimDownloadProfile)                         // 下载 eSIM profile（SSE 流式进度）
+		api.PATCH("/devices/:device_id/esim/profiles/:iccid/note", s.handleEsimProfileNote)                       // 修改 profile 备注
 		api.PATCH("/devices/:device_id/esim/profiles/:iccid", s.handleEsimRenameProfile)                          // 修改 profile 名称
 		api.DELETE("/devices/:device_id/esim/profiles/:iccid", s.handleEsimDeleteProfile)                         // 删除 eSIM profile
 
@@ -1436,6 +1437,13 @@ func (s *Server) handleStatusDetail(c *gin.Context) {
 		"imei":              status.IMEI,
 		"firmware":          status.Firmware,
 		"iccid":             status.ICCID,
+		"esim_note":         func() string {
+			note, err := db.GetEsimProfileNote(status.ICCID)
+			if err != nil {
+				return ""
+			}
+			return note
+		}(),
 		"imsi":              status.IMSI,
 		"native_spn":        status.NativeSPN,
 		"native_mcc":        status.NativeMCC,

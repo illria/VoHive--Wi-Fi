@@ -46,6 +46,9 @@ const deleting = ref<string | null>(null)
 const renaming = ref<string | null>(null)
 const showSensitive = useSensitiveVisibility()
 const renameValue = ref('')
+const noteEditing = ref<string | null>(null)
+const noteSaving = ref<string | null>(null)
+const noteValue = ref('')
 const notifications = ref<EsimNotificationItem[]>([])
 const notificationsLoading = ref(false)
 const notificationsDialogOpen = ref(false)
@@ -371,6 +374,31 @@ function cancelRename() {
   renameValue.value = ''
 }
 
+function startNoteEdit(iccid: string, currentNote: string | undefined) {
+  noteEditing.value = iccid
+  noteValue.value = currentNote || ''
+}
+
+function cancelNoteEdit() {
+  noteEditing.value = null
+  noteValue.value = ''
+}
+
+async function saveProfileNote(iccid: string) {
+  noteSaving.value = iccid
+  try {
+    const result = await devicesService.updateEsimProfileNote(props.deviceId, iccid, noteValue.value)
+    if (!result.ok) throw new Error(result.error.message || '保存备注失败')
+    ElMessage.success(noteValue.value.trim() ? '备注已保存' : '备注已清空')
+    cancelNoteEdit()
+    await fetchProfiles(false)
+  } catch (e: unknown) {
+    ElMessage.error(errorMessage(e, '保存备注失败'))
+  } finally {
+    noteSaving.value = null
+  }
+}
+
 // 删除 profile（需要输入 ICCID 后 4 位确认）
 async function deleteProfile(iccid: string, name: string, aidHex: string) {
   const last4 = iccid.slice(-4)
@@ -675,6 +703,9 @@ onBeforeUnmount(() => {
                 <span>{{ p.service_provider_name }}</span>
                 <span :class="{ 'blur-sm select-none': !showSensitive }">{{ p.iccid }}</span>
               </div>
+              <div v-if="p.note" class="text-xs text-blue-600 dark:text-blue-300 mt-1 ml-4 whitespace-pre-wrap break-words">
+                备注：{{ p.note }}
+              </div>
             </template>
             <!-- 编辑名称模式 -->
             <template v-else>
@@ -692,10 +723,23 @@ onBeforeUnmount(() => {
                 <el-button size="small" @click="cancelRename" class="!border-0">取消</el-button>
               </div>
             </template>
+            <div v-if="noteEditing === p.iccid" class="mt-2 ml-4 flex items-center gap-2 max-w-xl">
+              <el-input
+                v-model="noteValue"
+                size="small"
+                maxlength="500"
+                show-word-limit
+                placeholder="例如：荷兰 Vodafone 主卡"
+                @keyup.enter="saveProfileNote(p.iccid)"
+                @keyup.escape="cancelNoteEdit"
+              />
+              <el-button size="small" type="primary" :loading="noteSaving === p.iccid" @click="saveProfileNote(p.iccid)" class="!border-0">保存</el-button>
+              <el-button size="small" @click="cancelNoteEdit" class="!border-0">取消</el-button>
+            </div>
           </div>
 
           <!-- 操作按钮 -->
-          <div v-if="renaming !== p.iccid" class="flex items-center gap-2 flex-shrink-0">
+          <div v-if="renaming !== p.iccid" class="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
             <el-button
               v-if="p.state !== 1"
               size="small"
@@ -713,6 +757,14 @@ onBeforeUnmount(() => {
               plain
             >
               改名
+            </el-button>
+            <el-button
+              size="small"
+              type="info"
+              @click="startNoteEdit(p.iccid, p.note)"
+              plain
+            >
+              备注
             </el-button>
             <el-button
               size="small"

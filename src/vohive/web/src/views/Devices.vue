@@ -1270,6 +1270,7 @@ usePollingScheduler(async () => {
                   :traffic-minute-tx="rollingMinuteTx"
                   :e911-starting="e911Starting"
                   @setup-e911="openE911Websheet"
+                  @refresh="refreshSelectedDetailOnly"
                 />
                 <DeviceSIMSecurityPanel
                   :device-id="selectedDevice.id"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Eye24Regular, EyeOff24Regular } from '@vicons/fluent'
 import type { DeviceOverviewItem } from '../types/api'
 import { useSensitiveVisibility } from '../composables/useSensitiveVisibility'
@@ -9,6 +10,8 @@ import StatusLight from './StatusLight.vue'
 import OperatorSelectionDialog from './OperatorSelectionDialog.vue'
 import { Settings24Regular } from '@vicons/fluent'
 import type { StatusLightTone } from './statusLight'
+import { devicesService } from '../services/devices'
+import { errorMessage } from '../services/http'
 
 const props = defineProps<{
   device: DeviceOverviewItem | null
@@ -27,6 +30,49 @@ const emit = defineEmits<{
 
 const showSensitive = useSensitiveVisibility()
 const showOperatorSelection = ref(false)
+const esimNoteEditing = ref(false)
+const esimNoteSaving = ref(false)
+const esimNoteValue = ref('')
+
+watch(() => props.device?.esim_note, (value) => {
+  if (!esimNoteEditing.value) esimNoteValue.value = value || ''
+}, { immediate: true })
+
+watch(() => props.device?.modem?.iccid, () => {
+  esimNoteEditing.value = false
+  esimNoteValue.value = props.device?.esim_note || ''
+})
+
+function startEsimNoteEdit() {
+  esimNoteValue.value = props.device?.esim_note || ''
+  esimNoteEditing.value = true
+}
+
+function cancelEsimNoteEdit() {
+  esimNoteEditing.value = false
+  esimNoteValue.value = props.device?.esim_note || ''
+}
+
+async function saveEsimNote() {
+  const device = props.device
+  const iccid = device?.modem?.iccid?.trim()
+  if (!device?.id || !iccid) {
+    ElMessage.warning('当前没有可绑定的 eSIM')
+    return
+  }
+  esimNoteSaving.value = true
+  try {
+    const result = await devicesService.updateEsimProfileNote(device.id, iccid, esimNoteValue.value)
+    if (!result.ok) throw new Error(result.error.message || '保存备注失败')
+    ElMessage.success(esimNoteValue.value.trim() ? 'eSIM 备注已保存' : 'eSIM 备注已清空')
+    esimNoteEditing.value = false
+    emit('refresh')
+  } catch (e: unknown) {
+    ElMessage.error(errorMessage(e, '保存 eSIM 备注失败'))
+  } finally {
+    esimNoteSaving.value = false
+  }
+}
 
 const trafficStateLabel = computed(() => {
   const status = props.device?.traffic_meta?.status
@@ -371,6 +417,39 @@ const networkPanelMessage = computed(() => {
         <FieldRow label="近1分钟下载" :value="trafficRxDisplay"             monospace />
         <FieldRow label="实时下载速率"    :value="trafficDownloadRateDisplay"   monospace />
         <FieldRow label="实时上传速率"    :value="trafficUploadRateDisplay"     monospace />
+      </div>
+      <div class="mt-3 pt-3 border-t border-gray-200 dark:border-white/10">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-gray-500">eSIM 备注</span>
+          <el-button
+            v-if="!esimNoteEditing"
+            size="small"
+            type="primary"
+            plain
+            class="!border-0"
+            :disabled="!device?.modem?.iccid"
+            @click="startEsimNoteEdit"
+          >
+            编辑
+          </el-button>
+        </div>
+        <div v-if="esimNoteEditing" class="mt-2 space-y-2">
+          <el-input
+            v-model="esimNoteValue"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            placeholder="为当前 eSIM 记录备注"
+          />
+          <div class="flex justify-end gap-2">
+            <el-button size="small" @click="cancelEsimNoteEdit">取消</el-button>
+            <el-button size="small" type="primary" :loading="esimNoteSaving" class="!border-0" @click="saveEsimNote">保存</el-button>
+          </div>
+        </div>
+        <div v-else class="mt-1 whitespace-pre-wrap break-words text-gray-700 dark:text-gray-200">
+          {{ device?.esim_note || '暂无备注' }}
+        </div>
       </div>
     </div>
 

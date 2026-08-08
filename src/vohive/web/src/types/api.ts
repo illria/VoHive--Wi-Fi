@@ -115,6 +115,7 @@ export type DeviceOverviewItem = {
   local_phone?: string
   e911_setup_available?: boolean
   active_esim_profile_name?: string
+  esim_note?: string
   network_enabled: boolean
   vowifi_enabled?: boolean
   vowifi_active?: boolean
@@ -264,6 +265,7 @@ export type EsimProfileItem = {
   state: number
   state_text: string
   class_text?: string
+  note?: string
 }
 
 export type EsimEUICCProfiles = {
