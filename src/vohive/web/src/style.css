@@ -34,6 +34,51 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
+/* Keep the native login action visible after Tailwind's reset and theme
+   utilities have been emitted. The fallback colors also protect the first
+   paint when a custom property is unavailable during CSS loading. */
+.login-form > button.login-submit {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  border: 1px solid #0070f3 !important;
+  border-color: var(--vh-action, #0070f3) !important;
+  background-color: #0070f3 !important;
+  background-color: var(--vh-action, #0070f3) !important;
+  background-image: none !important;
+  color: #ffffff !important;
+  color: var(--vh-action-contrast, #ffffff) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  font: inherit;
+  font-weight: 600;
+}
+
+.login-form > button.login-submit > *,
+.login-form > button.login-submit svg {
+  color: inherit;
+  fill: currentColor;
+}
+
+.login-form > button.login-submit:hover:not(:disabled) {
+  border-color: var(--vh-action-hover, #005fcc) !important;
+  background-color: var(--vh-action-hover, #005fcc) !important;
+  color: var(--vh-action-contrast, #ffffff) !important;
+}
+
+.login-form > button.login-submit:disabled {
+  border-color: var(--vh-border-strong, #d6d6d6) !important;
+  background-color: var(--vh-surface-muted, #f6f6f6) !important;
+  color: var(--vh-text-subtle, #8b8b93) !important;
+  opacity: 1 !important;
+}
+
 ::selection {
   background: var(--vh-text-strong);
   color: var(--vh-bg);
