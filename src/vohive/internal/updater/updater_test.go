@@ -71,6 +71,21 @@ func newTestManager(t *testing.T, apiBaseURL string, isDocker func() bool, signa
 	})
 }
 
+func writePersistedUpdateStatus(t *testing.T, executable string, status UpdateStatus) {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(executable), "update", "status.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create update status directory: %v", err)
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal update status: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write update status: %v", err)
+	}
+}
+
 func TestNormalizeVersion(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -507,6 +522,95 @@ func TestUpdateStateFlow(t *testing.T) {
 	status := manager.Status()
 	if status.State != StateRestarting || status.TargetVersion != "v1.0.1" || status.Progress != 100 {
 		t.Fatalf("unexpected final state: %+v", status)
+	}
+}
+
+func TestNewManagerRecoversInterruptedUpdate(t *testing.T) {
+	tests := []struct {
+		name          string
+		current       string
+		target        string
+		wantState     UpdateState
+		wantErrorCode string
+	}{
+		{
+			name:      "replacement already landed",
+			current:   "v1.0.16",
+			target:    "v1.0.16",
+			wantState: StateSuccess,
+		},
+		{
+			name:          "replacement was interrupted",
+			current:       "v1.0.15",
+			target:        "v1.0.16",
+			wantState:     StateFailed,
+			wantErrorCode: string(ErrUpdateInterrupted),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setTestVersion(t, test.current)
+			root := t.TempDir()
+			executable := filepath.Join(root, "vohive")
+			if err := os.WriteFile(executable, []byte("current-version"), 0o755); err != nil {
+				t.Fatalf("create executable: %v", err)
+			}
+			now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+			writePersistedUpdateStatus(t, executable, UpdateStatus{
+				State:          StateApplying,
+				CurrentVersion: "v1.0.15",
+				TargetVersion:  test.target,
+				Progress:       0,
+				Message:        "正在替换当前版本",
+				UpdatedAt:      now.Add(-time.Minute),
+			})
+
+			manager := NewManager(Options{
+				Executable: func() (string, error) { return executable, nil },
+				IsDocker:   func() bool { return false },
+				Now:        func() time.Time { return now },
+			})
+			status := manager.Status()
+			if status.State != test.wantState {
+				t.Fatalf("recovered state=%q, want %q: %+v", status.State, test.wantState, status)
+			}
+			if status.ErrorCode != test.wantErrorCode {
+				t.Fatalf("recovered error code=%q, want %q", status.ErrorCode, test.wantErrorCode)
+			}
+			if updateInProgress(status.State) {
+				t.Fatalf("recovered state still blocks updates: %+v", status)
+			}
+		})
+	}
+}
+
+func TestStatusClearsStaleApplyingState(t *testing.T) {
+	setTestVersion(t, "v1.0.15")
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	executable := filepath.Join(root, "vohive")
+	if err := os.WriteFile(executable, []byte("current-version"), 0o755); err != nil {
+		t.Fatalf("create executable: %v", err)
+	}
+	manager := NewManager(Options{
+		Executable: func() (string, error) { return executable, nil },
+		IsDocker:   func() bool { return false },
+		Now:        func() time.Time { return now },
+	})
+	manager.mu.Lock()
+	manager.state = UpdateStatus{
+		State:          StateApplying,
+		CurrentVersion: "v1.0.15",
+		TargetVersion:  "v1.0.16",
+		Message:        "正在替换当前版本",
+		UpdatedAt:      now.Add(-defaultStaleApplyStateAge - time.Second),
+	}
+	manager.mu.Unlock()
+
+	status := manager.Status()
+	if status.State != StateFailed || status.ErrorCode != string(ErrUpdateInterrupted) {
+		t.Fatalf("stale applying state was not cleared: %+v", status)
 	}
 }
 

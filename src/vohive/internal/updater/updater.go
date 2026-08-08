@@ -48,6 +48,11 @@ const (
 	defaultChecksumRetryAttempts = 2
 	defaultChecksumRetryDelay    = 500 * time.Millisecond
 	defaultSignalDelay           = 2 * time.Second
+	// A process restart can leave a persisted transitional state behind before
+	// it gets a chance to write a terminal result. These limits prevent that
+	// stale state from blocking every later update check.
+	defaultStaleApplyStateAge   = 2 * time.Minute
+	defaultStaleControlStateAge = 10 * time.Minute
 	defaultMinimumFileSize       = 64 * 1024
 	defaultMaximumFileSize       = 128 * 1024 * 1024
 )
@@ -97,6 +102,7 @@ const (
 	ErrDockerUnsupported       ErrorCode = "docker_update_unsupported"
 	ErrRestartFailed           ErrorCode = "restart_failed"
 	ErrInvalidGitHubProxy      ErrorCode = "invalid_github_proxy"
+	ErrUpdateInterrupted       ErrorCode = "update_interrupted"
 )
 
 type UpdateError struct {
@@ -296,6 +302,8 @@ func NewManager(options Options) *Manager {
 	m.loadPersistedStatus()
 	if m.state.State == StateRestarting {
 		m.armStartupHealthWindow()
+	} else if m.recoverInterruptedStateLocked() {
+		m.persistStatus(m.state)
 	}
 	return m
 }
@@ -337,8 +345,19 @@ func MarkStartupHealthy() { defaultManager.MarkStartupHealthy() }
 
 func (m *Manager) Status() UpdateStatus {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.state
+	recovered := m.recoverStaleStateLocked()
+	status := m.state
+	if recovered {
+		// Keep the in-memory state and persisted state in the same critical
+		// section so a concurrent new update cannot be overwritten by this
+		// recovery write.
+		m.persistStatus(status)
+	}
+	m.mu.Unlock()
+	if recovered {
+		logger.Warn("清理超时的更新状态", "state", status.State, "message", status.Message)
+	}
+	return status
 }
 
 func (m *Manager) CheckUpdate() (*UpdateInfo, error) {
@@ -402,6 +421,9 @@ func (m *Manager) StartUpdateWithProxyURL(proxyID, customProxyURL string) (Updat
 
 func (m *Manager) StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
 	m.mu.Lock()
+	// Recover a stale persisted state before checking the update lock. This is
+	// important when the previous process died during backup or replacement.
+	m.recoverStaleStateLocked()
 	if m.running || updateInProgress(m.state.State) {
 		status := m.state
 		m.mu.Unlock()
@@ -1254,6 +1276,67 @@ func (m *Manager) MarkStartupHealthy() {
 	m.running = false
 	m.mu.Unlock()
 	m.persistStatus(status)
+}
+
+func versionReached(target string) bool {
+	current, currentOK := normalizeVersion(strings.TrimSpace(global.Version))
+	wanted, wantedOK := normalizeVersion(target)
+	return currentOK && wantedOK && semver.Compare(current, wanted) >= 0
+}
+
+// recoverInterruptedStateLocked converts a transitional state left by a
+// previous process into a terminal state. It must be called with m.mu held.
+func (m *Manager) recoverInterruptedStateLocked() bool {
+	if !updateInProgress(m.state.State) || m.state.State == StateRestarting {
+		return false
+	}
+
+	if versionReached(m.state.TargetVersion) {
+		m.state.State = StateSuccess
+		m.state.CurrentVersion = strings.TrimSpace(global.Version)
+		m.state.Progress = 100
+		m.state.Message = "上次更新已完成，服务已恢复"
+		m.state.Error = ""
+		m.state.ErrorCode = ""
+	} else {
+		m.state.State = StateFailed
+		m.state.CurrentVersion = strings.TrimSpace(global.Version)
+		m.state.Progress = 0
+		m.state.Message = "上次更新未完成，已解除更新锁定"
+		m.state.Error = "上次更新任务在服务重启前中断，请重新检查更新"
+		m.state.ErrorCode = string(ErrUpdateInterrupted)
+	}
+	m.state.UpdatedAt = m.now()
+	m.running = false
+	return true
+}
+
+func staleUpdateStateAge(state UpdateState) time.Duration {
+	switch state {
+	case StateBackingUp, StateApplying:
+		return defaultStaleApplyStateAge
+	case StateChecking, StateAvailable, StateVerifying:
+		return defaultStaleControlStateAge
+	default:
+		return 0
+	}
+}
+
+// recoverStaleStateLocked clears a transitional state that has not changed
+// for longer than its safety window. Active update goroutines are protected by
+// m.running and continue to be governed by their own request/read timeouts.
+func (m *Manager) recoverStaleStateLocked() bool {
+	if m.running || !updateInProgress(m.state.State) || m.state.State == StateRestarting {
+		return false
+	}
+	ageLimit := staleUpdateStateAge(m.state.State)
+	if ageLimit <= 0 || m.state.UpdatedAt.IsZero() {
+		return false
+	}
+	if m.now().Sub(m.state.UpdatedAt) < ageLimit {
+		return false
+	}
+	return m.recoverInterruptedStateLocked()
 }
 
 func (m *Manager) RollbackLastUpdate() error {
