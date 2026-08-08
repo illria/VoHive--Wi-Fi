@@ -543,7 +543,7 @@ func TestRunUpdatePinsProxySelectedDuringAutoCheck(t *testing.T) {
 		SignalDelay:   time.Millisecond,
 	})
 
-	manager.runUpdate(ProxyAuto)
+	manager.runUpdate(ProxyAuto, "")
 	if status := manager.Status(); status.State != StateRestarting {
 		t.Fatalf("update did not reach restarting state: %+v", status)
 	}

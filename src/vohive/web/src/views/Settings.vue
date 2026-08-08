@@ -256,6 +256,7 @@ const applyingUpdate = ref(false)
 const updateInfo = ref<UpdateInfo | null>(null)
 const updateStatus = ref<UpdateStatus | null>(null)
 const updateProxyOptions = ref<UpdateProxyOption[]>([])
+const customUpdateProxyID = 'custom'
 let updatePollTimer: number | undefined
 let updatePollStartedAt = 0
 let updatePollInFlight = false
@@ -271,9 +272,25 @@ function readStoredUpdateProxy() {
 
 const selectedUpdateProxy = ref(readStoredUpdateProxy())
 
+function readStoredCustomUpdateProxy() {
+  if (typeof window === 'undefined') return ''
+  try {
+    return window.localStorage.getItem('vohive.custom_update_proxy') || ''
+  } catch {
+    return ''
+  }
+}
+
+const customUpdateProxyURL = ref(readStoredCustomUpdateProxy())
+const checkedCustomUpdateProxyURL = ref('')
+
 function updateProxyLabel(proxyID?: string) {
   const option = updateProxyOptions.value.find((item) => item.id === proxyID)
   return option?.name || proxyID || '自动（推荐）'
+}
+
+function selectedUpdateProxyURL() {
+  return selectedUpdateProxy.value === customUpdateProxyID ? customUpdateProxyURL.value.trim() : ''
 }
 
 function persistUpdateProxy(proxyID: string) {
@@ -283,6 +300,16 @@ function persistUpdateProxy(proxyID: string) {
     window.localStorage.setItem('vohive.update_proxy', selectedUpdateProxy.value)
   } catch {
     // localStorage 受限时仍可继续使用当前页面选择。
+  }
+}
+
+function persistCustomUpdateProxy() {
+  customUpdateProxyURL.value = customUpdateProxyURL.value.trim()
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem('vohive.custom_update_proxy', customUpdateProxyURL.value)
+  } catch {
+    // localStorage 受限时仍可继续使用当前页面填写的地址。
   }
 }
 
@@ -367,11 +394,17 @@ async function loadUpdateStatus() {
 }
 
 async function doCheckUpdate() {
+  const proxyURL = selectedUpdateProxyURL()
+  if (selectedUpdateProxy.value === customUpdateProxyID && !proxyURL) {
+    ElMessage.warning('请先填写自定义 GitHub 加速地址')
+    return
+  }
   checkingUpdate.value = true
   try {
-    const res = await systemService.checkUpdate(selectedUpdateProxy.value)
+    const res = await systemService.checkUpdate(selectedUpdateProxy.value, proxyURL)
     if (!res.ok) throw new Error(res.error.message || '检查更新失败')
     updateInfo.value = res.data
+    checkedCustomUpdateProxyURL.value = proxyURL
     if (res.data.proxy_options?.length) {
       updateProxyOptions.value = res.data.proxy_options
     }
@@ -411,7 +444,14 @@ async function doApplyUpdate() {
     const proxyForApply = selectedUpdateProxy.value === 'auto'
       ? (updateInfo.value.proxy_id || 'auto')
       : selectedUpdateProxy.value
-    const res = await systemService.applyUpdate(proxyForApply)
+    const proxyURLForApply = proxyForApply === customUpdateProxyID
+      ? (checkedCustomUpdateProxyURL.value || selectedUpdateProxyURL())
+      : ''
+    if (proxyForApply === customUpdateProxyID && !proxyURLForApply) {
+      ElMessage.warning('请先填写自定义 GitHub 加速地址')
+      return
+    }
+    const res = await systemService.applyUpdate(proxyForApply, proxyURLForApply)
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
     updateStatus.value = res.data
     ElMessage.success('更新任务已开始，请等待服务重启')
@@ -527,6 +567,19 @@ onBeforeUnmount(() => {
                     </div>
                   </el-option>
                 </el-select>
+              </div>
+              <div v-if="selectedUpdateProxy === customUpdateProxyID" class="mt-3 rounded-lg border border-blue-100 bg-blue-50/70 p-3 dark:border-blue-400/20 dark:bg-blue-500/10">
+                <el-input
+                  v-model="customUpdateProxyURL"
+                  clearable
+                  size="small"
+                  placeholder="例如 https://ghproxy.example.com/"
+                  @change="persistCustomUpdateProxy()"
+                  @blur="persistCustomUpdateProxy()"
+                />
+                <div class="mt-2 text-[11px] text-blue-700/80 dark:text-blue-200/80">
+                  填写加速地址前缀，系统会在后面拼接 GitHub API 和 Release 地址；支持 HTTP(S)，例如 https://你的代理地址/
+                </div>
               </div>
             </div>
             

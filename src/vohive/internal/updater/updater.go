@@ -277,6 +277,10 @@ func CheckUpdateWithProxy(proxyID string) (*UpdateInfo, error) {
 	return defaultManager.CheckUpdateWithProxy(proxyID)
 }
 
+func CheckUpdateWithProxyURL(proxyID, customProxyURL string) (*UpdateInfo, error) {
+	return defaultManager.CheckUpdateWithProxyURL(proxyID, customProxyURL)
+}
+
 func ApplyUpdate() error {
 	_, err := defaultManager.StartUpdate()
 	return err
@@ -286,6 +290,10 @@ func StartUpdate() (UpdateStatus, error) { return defaultManager.StartUpdate() }
 
 func StartUpdateWithProxy(proxyID string) (UpdateStatus, error) {
 	return defaultManager.StartUpdateWithProxy(proxyID)
+}
+
+func StartUpdateWithProxyURL(proxyID, customProxyURL string) (UpdateStatus, error) {
+	return defaultManager.StartUpdateWithProxyURL(proxyID, customProxyURL)
 }
 
 func CurrentStatus() UpdateStatus { return defaultManager.Status() }
@@ -303,7 +311,11 @@ func (m *Manager) CheckUpdate() (*UpdateInfo, error) {
 }
 
 func (m *Manager) CheckUpdateWithProxy(proxyID string) (*UpdateInfo, error) {
-	release, proxy, err := m.fetchReleaseWithProxy(proxyID)
+	return m.CheckUpdateWithProxyURL(proxyID, "")
+}
+
+func (m *Manager) CheckUpdateWithProxyURL(proxyID, customProxyURL string) (*UpdateInfo, error) {
+	release, proxy, err := m.fetchReleaseWithProxyURL(proxyID, customProxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +358,10 @@ func (m *Manager) StartUpdate() (UpdateStatus, error) {
 }
 
 func (m *Manager) StartUpdateWithProxy(proxyID string) (UpdateStatus, error) {
+	return m.StartUpdateWithProxyURL(proxyID, "")
+}
+
+func (m *Manager) StartUpdateWithProxyURL(proxyID, customProxyURL string) (UpdateStatus, error) {
 	m.mu.Lock()
 	if m.running || updateInProgress(m.state.State) {
 		status := m.state
@@ -370,12 +386,12 @@ func (m *Manager) StartUpdateWithProxy(proxyID string) (UpdateStatus, error) {
 	m.mu.Unlock()
 	m.persistStatus(status)
 
-	go m.runUpdate(proxyID)
+	go m.runUpdate(proxyID, customProxyURL)
 	return status, nil
 }
 
-func (m *Manager) runUpdate(proxyID string) {
-	release, proxy, err := m.fetchReleaseWithProxy(proxyID)
+func (m *Manager) runUpdate(proxyID, customProxyURL string) {
+	release, proxy, err := m.fetchReleaseWithProxyURL(proxyID, customProxyURL)
 	if err != nil {
 		m.fail(err)
 		return
@@ -473,9 +489,13 @@ func (m *Manager) fetchRelease() (Release, error) {
 }
 
 func (m *Manager) fetchReleaseWithProxy(proxyID string) (Release, githubProxy, error) {
-	candidates, ok := proxyCandidates(proxyID)
-	if !ok {
-		return Release{}, githubProxy{}, newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
+	return m.fetchReleaseWithProxyURL(proxyID, "")
+}
+
+func (m *Manager) fetchReleaseWithProxyURL(proxyID, customProxyURL string) (Release, githubProxy, error) {
+	candidates, err := proxyCandidatesWithURL(proxyID, customProxyURL)
+	if err != nil {
+		return Release{}, githubProxy{}, err
 	}
 	var lastErr error
 	for _, proxy := range candidates {

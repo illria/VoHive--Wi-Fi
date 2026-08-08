@@ -289,15 +289,20 @@ export const systemService = {
       return res.data
     })
   },
-  checkUpdate(proxyID = 'auto') {
+  checkUpdate(proxyID = 'auto', proxyURL = '') {
     return callService(async () => {
-      const res = await api.get<UpdateInfo>('/system/update/check', { params: { proxy_id: proxyID } })
+      const res = await api.get<UpdateInfo>('/system/update/check', {
+        params: { proxy_id: proxyID, ...(proxyURL ? { proxy_url: proxyURL } : {}) }
+      })
       return res.data
     })
   },
-  applyUpdate(proxyID = 'auto') {
+  applyUpdate(proxyID = 'auto', proxyURL = '') {
     return callService(async () => {
-      const res = await api.post<UpdateStatus>('/system/update/apply', { proxy_id: proxyID })
+      const res = await api.post<UpdateStatus>('/system/update/apply', {
+        proxy_id: proxyID,
+        ...(proxyURL ? { proxy_url: proxyURL } : {})
+      })
       return res.data
     })
   },

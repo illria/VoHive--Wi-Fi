@@ -1,10 +1,12 @@
 package updater
 
-import "strings"
+import (
+	"errors"
+	"net/url"
+	"strings"
+)
 
 // ProxyOption is the safe, user-facing description of a GitHub endpoint.
-// The actual URL prefix stays server-side so the frontend cannot make the
-// updater fetch arbitrary URLs.
 type ProxyOption struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -19,6 +21,18 @@ type githubProxy struct {
 const (
 	ProxyAuto   = "auto"
 	ProxyDirect = "direct"
+	ProxyCustom = "custom"
+)
+
+const customProxyName = "自定义加速地址"
+
+var (
+	errEmptyCustomProxyURL       = errors.New("地址不能为空")
+	errCustomProxyURLControlChar = errors.New("地址不能包含换行符")
+	errCustomProxyURLSyntax      = errors.New("地址格式无效")
+	errCustomProxyURLScheme      = errors.New("地址必须使用 http 或 https")
+	errCustomProxyURLHost        = errors.New("地址必须包含主机名")
+	errCustomProxyURLShape       = errors.New("地址不能包含用户名、查询参数或片段")
 )
 
 func normalizeProxyID(proxyID string) string {
@@ -61,22 +75,46 @@ func GitHubProxyOptions() []ProxyOption {
 	for _, proxy := range githubProxyCatalog {
 		options = append(options, proxy.ProxyOption)
 	}
+	options = append(options, ProxyOption{
+		ID:          ProxyCustom,
+		Name:        customProxyName,
+		Description: "填写自己的 HTTP(S) GitHub 加速地址",
+	})
 	return options
 }
 
 func proxyCandidates(proxyID string) ([]githubProxy, bool) {
+	candidates, err := proxyCandidatesWithURL(proxyID, "")
+	return candidates, err == nil
+}
+
+func proxyCandidatesWithURL(proxyID, customURL string) ([]githubProxy, error) {
 	proxyID = normalizeProxyID(proxyID)
+	if proxyID == ProxyCustom {
+		prefix, err := normalizeCustomProxyURL(customURL)
+		if err != nil {
+			return nil, newUpdateError(ErrInvalidGitHubProxy, "自定义 GitHub 加速地址无效", err)
+		}
+		return []githubProxy{{
+			ProxyOption: ProxyOption{
+				ID:          ProxyCustom,
+				Name:        customProxyName,
+				Description: prefix,
+			},
+			prefix: prefix,
+		}}, nil
+	}
 	if proxyID == "" || proxyID == ProxyAuto {
 		candidates := make([]githubProxy, len(githubProxyCatalog))
 		copy(candidates, githubProxyCatalog)
-		return candidates, true
+		return candidates, nil
 	}
 	for _, proxy := range githubProxyCatalog {
 		if proxy.ID == proxyID {
-			return []githubProxy{proxy}, true
+			return []githubProxy{proxy}, nil
 		}
 	}
-	return nil, false
+	return nil, newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
 }
 
 func proxyByID(proxyID string) (githubProxy, bool) {
@@ -85,6 +123,30 @@ func proxyByID(proxyID string) (githubProxy, bool) {
 		return githubProxy{}, false
 	}
 	return candidates[0], true
+}
+
+func normalizeCustomProxyURL(rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", errEmptyCustomProxyURL
+	}
+	if strings.ContainsAny(rawURL, "\r\n") {
+		return "", errCustomProxyURLControlChar
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", errCustomProxyURLSyntax
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errCustomProxyURLScheme
+	}
+	if parsed.Host == "" {
+		return "", errCustomProxyURLHost
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errCustomProxyURLShape
+	}
+	return strings.TrimRight(rawURL, "/") + "/", nil
 }
 
 func rewriteGitHubURL(proxy githubProxy, rawURL string) string {

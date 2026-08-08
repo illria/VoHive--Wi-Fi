@@ -31,7 +31,7 @@ func writeUpdateError(c *gin.Context, err error) {
 
 // handleCheckUpdate 检查系统更新
 func (s *Server) handleCheckUpdate(c *gin.Context) {
-	info, err := updater.CheckUpdateWithProxy(c.Query("proxy_id"))
+	info, err := updater.CheckUpdateWithProxyURL(c.Query("proxy_id"), c.Query("proxy_url"))
 	if err != nil {
 		logger.Error("检查系统更新失败", "err", err)
 		writeUpdateError(c, err)
@@ -49,7 +49,8 @@ func (s *Server) handleUpdateProxies(c *gin.Context) {
 // handleApplyUpdate 应用系统更新
 func (s *Server) handleApplyUpdate(c *gin.Context) {
 	var request struct {
-		ProxyID string `json:"proxy_id"`
+		ProxyID  string `json:"proxy_id"`
+		ProxyURL string `json:"proxy_url"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -59,7 +60,7 @@ func (s *Server) handleApplyUpdate(c *gin.Context) {
 		})
 		return
 	}
-	status, err := updater.StartUpdateWithProxy(request.ProxyID)
+	status, err := updater.StartUpdateWithProxyURL(request.ProxyID, request.ProxyURL)
 	if err != nil {
 		logger.Error("应用更新失败", "err", err)
 		writeUpdateError(c, err)
