@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { EsimChipInfo, EsimEUICCProfiles, EsimNotificationItem, EsimProfileItem, EsimSpaceDelta } from '../types/api'
 import { devicesService } from '../services/devices'
@@ -75,8 +75,18 @@ const qrInput = ref<HTMLInputElement | null>(null)
 const qrScanning = ref(false)
 const qrScanError = ref('')
 const qrScanNote = ref('')
+const qrVideo = ref<HTMLVideoElement | null>(null)
+const qrCameraOpen = ref(false)
+const qrCameraStarting = ref(false)
 const recentSpaceDelta = ref<{ aidHex: string; message: string } | null>(null)
 let recentSpaceDeltaTimer: number | null = null
+let qrCameraStream: MediaStream | null = null
+let qrCameraTimer: number | null = null
+let qrCameraScanBusy = false
+let qrCameraDetector: BarcodeDetectorInstance | null = null
+let qrCameraCanvas: HTMLCanvasElement | null = null
+let qrCameraContext: CanvasRenderingContext2D | null = null
+let qrCameraFrame = 0
 
 type BarcodeDetection = { rawValue?: string }
 type BarcodeDetectorInstance = {
@@ -202,9 +212,10 @@ async function loadQrImage(file: File): Promise<QrImageHandle> {
   }
 }
 
-function decodeQrImageData(imageData: ImageData, width: number, height: number): string {
+function decodeQrImageData(imageData: ImageData, width: number, height: number, enhance = true): string {
   const result = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' })
   if (result?.data?.trim()) return result.data.trim()
+  if (!enhance) return ''
 
   // A phone photo may have a very bright background or low contrast. A single
   // high-contrast pass costs little and helps jsQR when the original pixels
@@ -334,8 +345,174 @@ async function detectQrPayload(file: File): Promise<QrDetectionResult> {
   throw new Error('兼容二维码识别未读取到二维码；请上传完整、清晰的 JPG/PNG 图片，确保二维码四周留有白边，或直接粘贴 LPA 激活码')
 }
 
+function clearQrCameraTimer() {
+  if (qrCameraTimer !== null) {
+    window.clearTimeout(qrCameraTimer)
+    qrCameraTimer = null
+  }
+}
+
+function stopQrCamera() {
+  clearQrCameraTimer()
+  qrCameraStream?.getTracks().forEach((track) => track.stop())
+  qrCameraStream = null
+  qrCameraDetector = null
+  qrCameraScanBusy = false
+  qrCameraCanvas = null
+  qrCameraContext = null
+  const video = qrVideo.value
+  if (video) {
+    video.pause()
+    video.srcObject = null
+  }
+  qrCameraOpen.value = false
+  qrCameraStarting.value = false
+}
+
+function describeCameraError(error: unknown): string {
+  if (!window.isSecureContext) {
+    return '手机摄像头需要 HTTPS 安全连接；请使用 HTTPS 地址打开，或继续使用上传二维码图片。'
+  }
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+      return '摄像头权限被拒绝，请在浏览器设置中允许本网站使用摄像头后重试。'
+    }
+    if (error.name === 'NotFoundError') {
+      return '没有找到可用摄像头，请检查手机摄像头权限或改用上传图片。'
+    }
+    if (error.name === 'NotReadableError') {
+      return '摄像头正在被其他应用占用，请关闭其他扫码或相机应用后重试。'
+    }
+  }
+  return errorMessage(error, '无法打开手机摄像头，请改用上传二维码图片')
+}
+
+function scheduleQrCameraScan(delay = 120) {
+  if (!qrCameraStream || qrCameraTimer !== null) return
+  qrCameraTimer = window.setTimeout(() => {
+    qrCameraTimer = null
+    void scanQrCameraFrame()
+  }, delay)
+}
+
+async function scanQrCameraFrame() {
+  if (!qrCameraStream || !qrCameraOpen.value) return
+  if (qrCameraScanBusy) {
+    scheduleQrCameraScan()
+    return
+  }
+  const video = qrVideo.value
+  if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) {
+    scheduleQrCameraScan()
+    return
+  }
+
+  qrCameraScanBusy = true
+  try {
+    let payload = ''
+    if (qrCameraDetector) {
+      try {
+        const results = await qrCameraDetector.detect(video)
+        payload = results.find((item) => item.rawValue?.trim())?.rawValue?.trim() || ''
+      } catch {
+        // BarcodeDetector is optional. If a browser cannot scan a video frame,
+        // continue with the bundled jsQR frame decoder.
+        qrCameraDetector = null
+      }
+    }
+
+    if (!payload) {
+      const maxDimension = 1280
+      const scale = Math.min(1, maxDimension / Math.max(video.videoWidth, video.videoHeight))
+      const width = Math.max(1, Math.round(video.videoWidth * scale))
+      const height = Math.max(1, Math.round(video.videoHeight * scale))
+      const canvas = qrCameraCanvas || (qrCameraCanvas = document.createElement('canvas'))
+      canvas.width = width
+      canvas.height = height
+      qrCameraContext ||= canvas.getContext('2d', { willReadFrequently: true })
+      if (!qrCameraContext) throw new Error('当前浏览器无法读取摄像头画面')
+      qrCameraContext.drawImage(video, 0, 0, width, height)
+      const imageData = qrCameraContext.getImageData(0, 0, width, height)
+      qrCameraFrame += 1
+      // Run the more expensive contrast pass periodically; normal frames keep
+      // the preview responsive on low-power mobile devices.
+      payload = decodeQrImageData(imageData, width, height, qrCameraFrame % 4 === 0)
+    }
+
+    if (payload) {
+      applyActivationCode(payload)
+      qrScanError.value = ''
+      qrScanNote.value = '已通过手机摄像头识别二维码，请确认目标 eUICC 后开始下载。'
+      ElMessage.success('已识别二维码，请确认目标 eUICC 后开始下载')
+      stopQrCamera()
+      return
+    }
+  } catch (error: unknown) {
+    qrScanError.value = describeCameraError(error)
+    stopQrCamera()
+  } finally {
+    qrCameraScanBusy = false
+    scheduleQrCameraScan()
+  }
+}
+
+async function openQrCamera() {
+  if (qrCameraOpen.value || qrCameraStarting.value) return
+  if (downloading.value || qrScanning.value) return
+  qrScanError.value = ''
+  qrScanNote.value = ''
+
+  if (!window.isSecureContext) {
+    qrScanError.value = '手机摄像头需要 HTTPS 安全连接；请使用 HTTPS 地址打开，或继续使用上传二维码图片。'
+    return
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    qrScanError.value = '当前手机浏览器不支持摄像头访问，请改用上传二维码图片。'
+    return
+  }
+
+  qrCameraStarting.value = true
+  try {
+    qrCameraStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
+    })
+    qrCameraOpen.value = true
+    await nextTick()
+    const video = qrVideo.value
+    if (!video) throw new Error('摄像头预览初始化失败')
+    video.muted = true
+    video.playsInline = true
+    video.srcObject = qrCameraStream
+    await video.play()
+    const Detector = barcodeDetectorConstructor()
+    try {
+      qrCameraDetector = Detector ? new Detector({ formats: ['qr_code'] }) : null
+    } catch {
+      // Some browsers expose BarcodeDetector but do not support the QR format.
+      qrCameraDetector = null
+    }
+    qrCameraFrame = 0
+    qrScanNote.value = qrCameraDetector
+      ? '请将二维码完整放入取景框，优先使用手机后置摄像头。'
+      : '当前浏览器使用兼容识别，请将清晰二维码完整放入取景框。'
+    scheduleQrCameraScan(80)
+  } catch (error: unknown) {
+    stopQrCamera()
+    qrScanError.value = describeCameraError(error)
+  } finally {
+    qrCameraStarting.value = false
+  }
+}
+
 function openQrPicker() {
-  if (!qrScanning.value) qrInput.value?.click()
+  if (qrScanning.value || downloading.value) return
+  stopQrCamera()
+  qrInput.value?.click()
 }
 
 async function handleQrFileChange(event: Event) {
@@ -344,6 +521,7 @@ async function handleQrFileChange(event: Event) {
   input.value = ''
   if (!file) return
 
+  stopQrCamera()
   qrScanning.value = true
   qrScanError.value = ''
   qrScanNote.value = ''
@@ -778,6 +956,7 @@ watch(
 
 onBeforeUnmount(() => {
   clearRecentSpaceDelta()
+  stopQrCamera()
   if (fetchAbortController) {
     fetchAbortController.abort()
   }
@@ -1135,10 +1314,10 @@ onBeforeUnmount(() => {
           </div>
           <div>
             <div class="text-sm font-bold text-gray-900 dark:text-white">下载新 Profile</div>
-            <div class="text-[11px] text-gray-400 dark:text-gray-500">上传 eSIM 二维码，自动读取 LPA 激活信息（手机端自动使用兼容识别；建议 JPG/PNG）</div>
+            <div class="text-[11px] text-gray-400 dark:text-gray-500">手机端可直接扫描二维码，电脑端也可上传图片读取 LPA 激活信息</div>
           </div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <input
             ref="qrInput"
             type="file"
@@ -1146,10 +1325,32 @@ onBeforeUnmount(() => {
             class="hidden"
             @change="handleQrFileChange"
           />
-          <el-button type="primary" plain :loading="qrScanning" :disabled="downloading" @click="openQrPicker">
-            <el-icon><Add24Regular /></el-icon>
-            上传二维码
+          <el-button
+            type="primary"
+            :loading="qrCameraStarting"
+            :disabled="downloading || qrScanning || qrCameraStarting"
+            @click="qrCameraOpen ? stopQrCamera() : openQrCamera()"
+          >
+            {{ qrCameraOpen ? '关闭扫描' : '扫描二维码' }}
           </el-button>
+          <el-button type="primary" plain :loading="qrScanning" :disabled="downloading || qrCameraOpen" @click="openQrPicker">
+            <el-icon><Add24Regular /></el-icon>
+            上传图片
+          </el-button>
+        </div>
+      </div>
+      <div v-if="qrCameraStarting" class="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-xs text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
+        正在请求手机摄像头权限，请在浏览器弹窗中选择“允许”。
+      </div>
+      <div v-if="qrCameraOpen" class="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-black dark:border-white/10">
+        <div class="relative aspect-video w-full overflow-hidden">
+          <video ref="qrVideo" class="h-full w-full object-cover" autoplay muted playsinline />
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div class="h-2/3 w-2/3 rounded-2xl border-2 border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.28)]" />
+          </div>
+          <div class="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-xs font-medium text-white drop-shadow">
+            将二维码完整放入取景框，保持清晰并留出白边
+          </div>
         </div>
       </div>
       <div v-if="qrScanError || qrScanNote" class="mb-3 rounded-lg border px-3 py-2 text-xs" :class="qrScanError ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300' : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'">
