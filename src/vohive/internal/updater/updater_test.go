@@ -316,6 +316,28 @@ func TestDownloadBinaryUsesSeparateDownloadTimeout(t *testing.T) {
 	}
 }
 
+func TestDownloadChecksumUsesSeparateDownloadTimeout(t *testing.T) {
+	payload := []byte("checksum-payload")
+	digest := sha256.Sum256(payload)
+	checksumText := hex.EncodeToString(digest[:]) + "  binary\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = io.WriteString(writer, checksumText)
+	}))
+	defer server.Close()
+
+	manager := newTestManager(t, server.URL, nil, nil)
+	manager.httpClient = &http.Client{Timeout: 10 * time.Millisecond}
+	manager.downloadHTTPClient = &http.Client{Timeout: time.Second}
+	checksum, err := manager.downloadChecksum(Asset{BrowserDownloadURL: server.URL})
+	if err != nil {
+		t.Fatalf("downloadChecksum should use the separate download client: %v", err)
+	}
+	if checksum != hex.EncodeToString(digest[:]) {
+		t.Fatalf("checksum=%q, want=%q", checksum, hex.EncodeToString(digest[:]))
+	}
+}
+
 func TestDownloadBinaryResumesAfterBodyReadFailure(t *testing.T) {
 	payload := bytesForTest(256)
 	cutoff := 73

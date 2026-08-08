@@ -31,6 +31,29 @@ func TestGitHubProxyOptionsExposeAutoDirectAndCustom(t *testing.T) {
 	}
 }
 
+func TestChecksumProxyCandidatesKeepSelectedEntryFirst(t *testing.T) {
+	selected := githubProxyCatalog[1]
+	candidates := checksumProxyCandidates(ProxyAuto, "", selected)
+	if len(candidates) != len(githubProxyCatalog) {
+		t.Fatalf("candidate count=%d, want=%d", len(candidates), len(githubProxyCatalog))
+	}
+	if candidates[0].ID != selected.ID {
+		t.Fatalf("first checksum entry=%q, want selected %q", candidates[0].ID, selected.ID)
+	}
+	seen := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if seen[candidate.ID] {
+			t.Fatalf("duplicate checksum entry %q", candidate.ID)
+		}
+		seen[candidate.ID] = true
+	}
+
+	direct := githubProxyCatalog[len(githubProxyCatalog)-1]
+	if candidates := checksumProxyCandidates(ProxyDirect, "", direct); len(candidates) != 1 || candidates[0].ID != ProxyDirect {
+		t.Fatalf("explicit direct mode should not rotate checksum entries: %+v", candidates)
+	}
+}
+
 func TestProxyCandidates(t *testing.T) {
 	auto, ok := proxyCandidates(ProxyAuto)
 	if !ok || len(auto) < 3 {

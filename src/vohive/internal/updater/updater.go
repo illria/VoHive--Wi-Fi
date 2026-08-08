@@ -33,15 +33,18 @@ const (
 	// Release metadata should fail fast when an endpoint is unavailable, but a
 	// large binary may legitimately take longer than that to arrive through a
 	// public proxy. The download request has no whole-body client timeout; this
-	// is the per-attempt upper bound, while idleDownloadReader handles a stalled
+	// is the per-attempt upper bound, while idleTimeoutReader handles a stalled
 	// body without interrupting an otherwise slow but active transfer.
-	defaultDownloadTimeout      = 30 * time.Minute
-	defaultDownloadIdleTimeout  = 60 * time.Second
+	defaultDownloadTimeout       = 30 * time.Minute
+	defaultDownloadIdleTimeout   = 60 * time.Second
 	defaultDownloadRetryAttempts = 4
-	defaultDownloadRetryDelay   = 500 * time.Millisecond
-	defaultSignalDelay          = 2 * time.Second
-	defaultMinimumFileSize      = 64 * 1024
-	defaultMaximumFileSize      = 128 * 1024 * 1024
+	defaultDownloadRetryDelay    = 500 * time.Millisecond
+	defaultChecksumTimeout       = 2 * time.Minute
+	defaultChecksumRetryAttempts = 3
+	defaultChecksumRetryDelay    = 500 * time.Millisecond
+	defaultSignalDelay           = 2 * time.Second
+	defaultMinimumFileSize       = 64 * 1024
+	defaultMaximumFileSize       = 128 * 1024 * 1024
 )
 
 type Channel string
@@ -467,10 +470,12 @@ func (m *Manager) runUpdate(proxyID, customProxyURL string) {
 	}
 
 	// The metadata request may use auto mode to find a working entry. Keep that
-	// concrete entry for the entire download and verification phase; rotating
-	// after a response body has started can leave a partial binary and make the
-	// next endpoint unable to resume the same transfer.
-	downloadPath, err := m.downloadAndVerifyAssets(binaryAsset, checksumAsset, downloadDir, latestVersion, proxy)
+	// concrete entry for the entire binary download; rotating after a response
+	// body has started can leave a partial binary and make the next endpoint
+	// unable to resume the same transfer. Once the binary is complete, the small
+	// checksum file may safely use the remaining auto-mode entries if needed.
+	checksumProxies := checksumProxyCandidates(proxyID, customProxyURL, proxy)
+	downloadPath, err := m.downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checksumAsset, downloadDir, latestVersion, proxy, checksumProxies)
 	if err != nil {
 		m.fail(err)
 		return
@@ -682,6 +687,10 @@ func findAssets(assets []Asset, binaryName string) (Asset, Asset, error) {
 }
 
 func (m *Manager) downloadAndVerifyAssets(binaryAsset, checksumAsset Asset, directory, targetVersion string, proxy githubProxy) (string, error) {
+	return m.downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checksumAsset, directory, targetVersion, proxy, []githubProxy{proxy})
+}
+
+func (m *Manager) downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checksumAsset Asset, directory, targetVersion string, proxy githubProxy, checksumProxies []githubProxy) (string, error) {
 	if proxy.ID == "" {
 		return "", newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
 	}
@@ -693,17 +702,17 @@ func (m *Manager) downloadAndVerifyAssets(binaryAsset, checksumAsset Asset, dire
 		return "", err
 	}
 
-	m.setState(StateVerifying, 0, fmt.Sprintf("正在通过 %s 验证 SHA-256", proxy.Name), targetVersion)
-	checksum, err := m.downloadChecksumWithProxy(checksumAsset, proxy)
+	checksum, checksumProxy, err := m.downloadChecksumFromProxies(checksumAsset, checksumProxies, targetVersion)
 	if err == nil {
 		err = verifyChecksum(downloadPath, checksum)
 	}
 	if err != nil {
 		_ = os.Remove(downloadPath)
-		logger.Warn("GitHub 更新资产校验失败，本次任务保持当前入口", "proxy", proxy.ID, "err", err)
+		logger.Warn("GitHub 更新资产校验失败，本次任务保持当前版本", "proxy", proxy.ID, "err", err)
 		return "", err
 	}
 
+	logger.Debug("GitHub 更新资产 SHA-256 校验入口", "proxy", checksumProxy.ID)
 	m.setState(StateVerifying, 100, "SHA-256 校验通过", targetVersion)
 	return downloadPath, nil
 }
@@ -997,13 +1006,33 @@ func (m *Manager) downloadChecksum(asset Asset) (string, error) {
 }
 
 func (m *Manager) downloadChecksumWithProxy(asset Asset, proxy githubProxy) (string, error) {
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rewriteGitHubURL(proxy, asset.BrowserDownloadURL), nil)
+	var lastErr error
+	for attempt := 1; attempt <= defaultChecksumRetryAttempts; attempt++ {
+		checksum, err := m.downloadChecksumAttempt(asset, proxy)
+		if err == nil {
+			return checksum, nil
+		}
+		lastErr = err
+		// A missing checksum asset is deterministic and should not be retried.
+		if ErrorCodeOf(err) == string(ErrChecksumAssetNotFound) || attempt == defaultChecksumRetryAttempts {
+			break
+		}
+		time.Sleep(defaultChecksumRetryDelay)
+	}
+	return "", lastErr
+}
+
+func (m *Manager) downloadChecksumAttempt(asset Asset, proxy githubProxy) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultChecksumTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rewriteGitHubURL(proxy, asset.BrowserDownloadURL), nil)
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "创建 SHA-256 下载请求失败", err)
 	}
 	request.Header.Set("Accept", "text/plain")
+	request.Header.Set("Accept-Encoding", "identity")
 	request.Header.Set("User-Agent", "VoHive-Updater")
-	response, err := m.httpClient.Do(request)
+	response, err := m.downloadHTTPClient.Do(request)
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "下载 SHA-256 文件失败", err)
 	}
@@ -1014,7 +1043,8 @@ func (m *Manager) downloadChecksumWithProxy(asset Asset, proxy githubProxy) (str
 	if response.StatusCode != http.StatusOK {
 		return "", newUpdateError(ErrDownloadFailed, fmt.Sprintf("SHA-256 下载返回 HTTP %d", response.StatusCode), nil)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	reader := &idleTimeoutReader{body: response.Body, timeout: defaultDownloadIdleTimeout}
+	data, err := io.ReadAll(io.LimitReader(reader, 64*1024))
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "读取 SHA-256 文件失败", err)
 	}
@@ -1026,6 +1056,25 @@ func (m *Manager) downloadChecksumWithProxy(asset Asset, proxy githubProxy) (str
 		return "", newUpdateError(ErrChecksumMismatch, "SHA-256 文件格式无效", err)
 	}
 	return strings.ToLower(fields[0]), nil
+}
+
+func (m *Manager) downloadChecksumFromProxies(asset Asset, proxies []githubProxy, targetVersion string) (string, githubProxy, error) {
+	if len(proxies) == 0 {
+		return "", githubProxy{}, newUpdateError(ErrInvalidGitHubProxy, "没有可用的 SHA-256 校验入口", nil)
+	}
+	var lastErr error
+	for index, proxy := range proxies {
+		m.setState(StateVerifying, 0, fmt.Sprintf("正在通过 %s 验证 SHA-256", proxy.Name), targetVersion)
+		checksum, err := m.downloadChecksumWithProxy(asset, proxy)
+		if err == nil {
+			return checksum, proxy, nil
+		}
+		lastErr = err
+		if index+1 < len(proxies) {
+			logger.Warn("SHA-256 校验入口不可用，尝试下一个入口（不切换已完成的二进制下载）", "proxy", proxy.ID, "err", err)
+		}
+	}
+	return "", githubProxy{}, lastErr
 }
 
 func verifyChecksum(path, expected string) error {

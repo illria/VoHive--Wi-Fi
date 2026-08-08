@@ -125,6 +125,30 @@ func proxyByID(proxyID string) (githubProxy, bool) {
 	return candidates[0], true
 }
 
+// checksumProxyCandidates is evaluated only after the binary has been
+// downloaded. Auto mode keeps the selected entry first, then allows the
+// checksum request to use the remaining public entries. This preserves the
+// binary's resumable transfer while recovering from a proxy that serves the
+// binary but stalls or rejects the small checksum asset.
+func checksumProxyCandidates(proxyID, customURL string, selected githubProxy) []githubProxy {
+	candidates := []githubProxy{selected}
+	if normalizeProxyID(proxyID) != ProxyAuto {
+		return candidates
+	}
+
+	autoCandidates, err := proxyCandidatesWithURL(ProxyAuto, customURL)
+	if err != nil {
+		return candidates
+	}
+	for _, candidate := range autoCandidates {
+		if candidate.ID == selected.ID {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
+}
+
 func normalizeCustomProxyURL(rawURL string) (string, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
