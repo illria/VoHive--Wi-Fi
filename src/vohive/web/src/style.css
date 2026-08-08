@@ -91,6 +91,28 @@ select:focus-visible {
   --el-button-hover-text-color: var(--vh-accent-contrast);
 }
 
+/* Keep solid primary controls readable across Element Plus theme variables.
+   Plain, text, and link buttons retain their own outline/link treatment. */
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  background-color: var(--vh-link) !important;
+  border-color: var(--vh-link) !important;
+  color: #ffffff !important;
+}
+
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link):hover:not(.is-disabled) {
+  background-color: color-mix(in srgb, var(--vh-link) 84%, #000000) !important;
+  border-color: var(--vh-link) !important;
+  color: #ffffff !important;
+}
+
+.el-button--primary.is-disabled,
+.el-button--primary.is-disabled:hover {
+  background-color: var(--vh-surface-muted) !important;
+  border-color: var(--vh-border-strong) !important;
+  color: var(--vh-text-subtle) !important;
+  opacity: 1;
+}
+
 .el-input__wrapper,
 .el-select__wrapper,
 .el-textarea__inner {

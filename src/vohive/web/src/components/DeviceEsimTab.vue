@@ -31,7 +31,6 @@ import {
 
 const props = defineProps<{
   deviceId: string
-  deviceImei?: string
   isActive?: boolean
 }>()
 
@@ -71,19 +70,6 @@ const qrScanError = ref('')
 const qrScanNote = ref('')
 const recentSpaceDelta = ref<{ aidHex: string; message: string } | null>(null)
 let recentSpaceDeltaTimer: number | null = null
-let lastDeviceImeiDefault = ''
-
-function defaultDeviceImei() {
-  return (props.deviceImei || '').trim()
-}
-
-function applyDeviceImeiDefault(force = false) {
-  const next = defaultDeviceImei()
-  if (force || !downloadForm.value.imei || downloadForm.value.imei === lastDeviceImeiDefault) {
-    downloadForm.value.imei = next
-  }
-  lastDeviceImeiDefault = next
-}
 
 type BarcodeDetection = { rawValue?: string }
 type BarcodeDetectorInstance = {
@@ -496,7 +482,7 @@ async function downloadProfile() {
             } else {
               ElMessage.success(notice.message)
             }
-            downloadForm.value = { smdp: '', matchingId: '', confirmationCode: '', aidHex: targetAidHex, imei }
+            downloadForm.value = { smdp: '', matchingId: '', confirmationCode: '', aidHex: targetAidHex, imei: '' }
             await fetchOverview(true)
             break outer
           }
@@ -525,15 +511,11 @@ watch(
     chipInfo.value = null
     profiles.value = []
     downloadForm.value.aidHex = ''
-    applyDeviceImeiDefault(true)
+    downloadForm.value.imei = ''
     fetchOverview()
   },
   { immediate: true }
 )
-
-watch(() => props.deviceImei, () => {
-  applyDeviceImeiDefault(false)
-})
 
 onBeforeUnmount(() => {
   clearRecentSpaceDelta()
@@ -838,7 +820,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="space-y-1">
           <div class="text-[11px] font-bold text-gray-500 uppercase tracking-wider">IMEI</div>
-          <el-input v-model="downloadForm.imei" maxlength="15" placeholder="默认使用设备 IMEI，可修改" />
+          <el-input v-model="downloadForm.imei" maxlength="15" placeholder="可选；留空由设备自动获取" />
         </div>
         <div class="space-y-1">
           <div class="text-[11px] font-bold text-gray-500 uppercase tracking-wider">目标 eUICC</div>
@@ -869,7 +851,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="flex justify-end mt-4">
-        <el-button type="primary" :loading="downloading" :disabled="downloading" @click="downloadProfile" class="!border-0">
+        <el-button type="primary" :loading="downloading" :disabled="downloading" @click="downloadProfile" class="ui-esim-download-button !border-0">
           <el-icon><ArrowDownload24Regular /></el-icon>
           开始下载
         </el-button>
@@ -883,6 +865,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.ui-esim-download-button {
+  min-width: 132px;
+}
+
 .esim-loading-hero {
   min-height: 88px;
 }
