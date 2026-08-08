@@ -78,6 +78,7 @@ const e911WebsheetOpen = ref(false)
 const e911Websheet = ref<CarrierWebsheetInfo | null>(null)
 const deleting = ref(false)
 const rescanning = ref(false)
+const reloadingPage = ref(false)
 
 // 卡策略（跟当前选中设备的 ICCID 绑定）
 const cardPolicy = ref<CardPolicy | null>(null)
@@ -669,6 +670,20 @@ async function fetchAll() {
   }
 }
 
+async function reloadPage() {
+  if (editDirty.value) {
+    const confirmed = await ElMessageBox.confirm(
+      '当前有未保存的配置修改，网页刷新后这些修改会丢失。确定继续刷新吗？',
+      '确认网页刷新',
+      { confirmButtonText: '继续刷新', cancelButtonText: '取消', type: 'warning' }
+    ).then(() => true).catch(() => false)
+    if (!confirmed) return
+  }
+
+  reloadingPage.value = true
+  window.location.reload()
+}
+
 async function refreshListOnly() {
   try {
     const prevSelected = selectedId.value
@@ -1200,7 +1215,7 @@ usePollingScheduler(async () => {
     <PageHeader title="设备管理" subtitle="查看设备信息、编辑配置、执行 AT 指令">
       <template #actions>
         <div class="flex items-center gap-2">
-          <RefreshButton :loading="loading" @click="fetchAll" />
+          <RefreshButton :loading="reloadingPage" label="全局刷新" @click="reloadPage" />
           <el-button @click="rescanDevices" :loading="rescanning" class="ui-glass-border !border-0">
             <el-icon><ArrowSync24Regular /></el-icon>
             重新扫描
