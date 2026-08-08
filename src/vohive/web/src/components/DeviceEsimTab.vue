@@ -10,6 +10,7 @@ import { applyOptimisticActiveState } from './deviceEsimOptimistic'
 import { pickNextDownloadAid } from './deviceEsimOverviewRefresh'
 import { describeDeleteResultNotice, describeDownloadTerminalNotice, describeSpaceDelta } from './deviceEsimOperationNotice'
 import { parseEsimActivationCode } from '../utils/esimActivationCode'
+import jsQR from 'jsqr'
 import {
   formatEsimNotificationEvent,
   notificationDialogWidth,
@@ -117,12 +118,7 @@ function barcodeDetectorConstructor(): BarcodeDetectorConstructor | null {
   return typeof candidate === 'function' ? candidate : null
 }
 
-async function detectQrPayload(file: File): Promise<string> {
-  const Detector = barcodeDetectorConstructor()
-  if (!Detector) {
-    throw new Error('当前浏览器不支持图片二维码识别，请使用 Chrome/Edge，或直接粘贴 LPA 激活码')
-  }
-
+async function detectQrPayloadWithBarcodeDetector(file: File, Detector: BarcodeDetectorConstructor): Promise<string> {
   const detector = new Detector({ formats: ['qr_code'] })
   if (typeof createImageBitmap === 'function') {
     const bitmap = await createImageBitmap(file)
@@ -149,6 +145,76 @@ async function detectQrPayload(file: File): Promise<string> {
   }
 }
 
+async function detectQrPayloadWithJsQr(file: File): Promise<string> {
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error('无法读取二维码图片'))
+      element.src = objectUrl
+    })
+    const sourceWidth = image.naturalWidth || image.width
+    const sourceHeight = image.naturalHeight || image.height
+    if (!sourceWidth || !sourceHeight) {
+      throw new Error('二维码图片尺寸无效')
+    }
+
+    // Very large phone screenshots can make a pure-JS decoder slow. Keep enough
+    // detail for small QR modules while bounding the amount of pixel work.
+    const maxDimension = 2400
+    const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight))
+    const width = Math.max(1, Math.round(sourceWidth * scale))
+    const height = Math.max(1, Math.round(sourceHeight * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) {
+      throw new Error('当前浏览器无法读取图片像素')
+    }
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(image, 0, 0, width, height)
+    const imageData = context.getImageData(0, 0, width, height)
+    const result = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' })
+    return result?.data?.trim() || ''
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+type QrDetectionResult = {
+  payload: string
+  usedFallback: boolean
+}
+
+async function detectQrPayload(file: File): Promise<QrDetectionResult> {
+  const Detector = barcodeDetectorConstructor()
+  if (Detector) {
+    try {
+      const payload = await detectQrPayloadWithBarcodeDetector(file, Detector)
+      if (payload) return { payload, usedFallback: false }
+    } catch {
+      // Some browsers expose BarcodeDetector but fail for a particular image;
+      // continue with the bundled decoder below.
+    }
+  }
+
+  try {
+    const payload = await detectQrPayloadWithJsQr(file)
+    if (payload) return { payload, usedFallback: true }
+  } catch {
+    // The user-facing error below also covers browsers with restricted canvas
+    // access or images that cannot be decoded by the fallback.
+  }
+
+  if (!Detector) {
+    throw new Error('当前浏览器不支持原生图片二维码识别，兼容识别也未读取到二维码；请上传清晰图片或直接粘贴 LPA 激活码')
+  }
+  throw new Error('图片中没有识别到二维码，请上传清晰的二维码图片或直接粘贴 LPA 激活码')
+}
+
 function openQrPicker() {
   if (!qrScanning.value) qrInput.value?.click()
 }
@@ -163,9 +229,11 @@ async function handleQrFileChange(event: Event) {
   qrScanError.value = ''
   qrScanNote.value = ''
   try {
-    const payload = await detectQrPayload(file)
-    if (!payload) throw new Error('图片中没有识别到二维码')
-    applyActivationCode(payload)
+    const detection = await detectQrPayload(file)
+    applyActivationCode(detection.payload)
+    if (detection.usedFallback) {
+      qrScanNote.value = '浏览器原生识别不可用，已使用兼容识别模式。'
+    }
     ElMessage.success('已识别二维码，请确认目标 eUICC 后开始下载')
   } catch (e: unknown) {
     qrScanError.value = errorMessage(e, '二维码识别失败')
@@ -948,14 +1016,14 @@ onBeforeUnmount(() => {
           </div>
           <div>
             <div class="text-sm font-bold text-gray-900 dark:text-white">下载新 Profile</div>
-            <div class="text-[11px] text-gray-400 dark:text-gray-500">上传 eSIM 二维码，自动读取 LPA 激活信息</div>
+            <div class="text-[11px] text-gray-400 dark:text-gray-500">上传 eSIM 二维码，自动读取 LPA 激活信息（不支持原生识别时自动使用兼容模式）</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
           <input
             ref="qrInput"
             type="file"
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/*"
             class="hidden"
             @change="handleQrFileChange"
           />
