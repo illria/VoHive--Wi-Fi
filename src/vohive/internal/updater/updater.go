@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/iniwex5/vohive/internal/global"
 	"github.com/iniwex5/vohive/pkg/logger"
 	"golang.org/x/mod/semver"
+	xproxy "golang.org/x/net/proxy"
 )
 
 const (
@@ -28,8 +30,8 @@ const (
 	DefaultRepoName  = "VoHive--Wi-Fi"
 	DefaultChannel   = "stable"
 
-	defaultAPIBaseURL      = "https://api.github.com"
-	defaultRequestTimeout  = 20 * time.Second
+	defaultAPIBaseURL     = "https://api.github.com"
+	defaultRequestTimeout = 20 * time.Second
 	// Release metadata should fail fast when an endpoint is unavailable, but a
 	// large binary may legitimately take longer than that to arrive through a
 	// public proxy. The download request has no whole-body client timeout; this
@@ -37,15 +39,20 @@ const (
 	// body without interrupting an otherwise slow but active transfer.
 	defaultDownloadTimeout       = 30 * time.Minute
 	defaultDownloadIdleTimeout   = 60 * time.Second
+	defaultDownloadSpeedWindow   = 3 * time.Minute
+	defaultMinimumDownloadRate   = 32 * 1024
 	defaultDownloadRetryAttempts = 4
 	defaultDownloadRetryDelay    = 500 * time.Millisecond
-	defaultChecksumTimeout       = 2 * time.Minute
-	defaultChecksumRetryAttempts = 3
+	defaultChecksumTimeout       = 30 * time.Second
+	defaultChecksumIdleTimeout   = 15 * time.Second
+	defaultChecksumRetryAttempts = 2
 	defaultChecksumRetryDelay    = 500 * time.Millisecond
 	defaultSignalDelay           = 2 * time.Second
 	defaultMinimumFileSize       = 64 * 1024
 	defaultMaximumFileSize       = 128 * 1024 * 1024
 )
+
+var errDownloadTooSlow = errors.New("下载速度低于最低阈值")
 
 type Channel string
 
@@ -320,6 +327,10 @@ func StartUpdateWithProxyURL(proxyID, customProxyURL string) (UpdateStatus, erro
 	return defaultManager.StartUpdateWithProxyURL(proxyID, customProxyURL)
 }
 
+func StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
+	return defaultManager.StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL, allowProxyFallback)
+}
+
 func CurrentStatus() UpdateStatus { return defaultManager.Status() }
 
 func MarkStartupHealthy() { defaultManager.MarkStartupHealthy() }
@@ -386,6 +397,10 @@ func (m *Manager) StartUpdateWithProxy(proxyID string) (UpdateStatus, error) {
 }
 
 func (m *Manager) StartUpdateWithProxyURL(proxyID, customProxyURL string) (UpdateStatus, error) {
+	return m.StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL, normalizeProxyID(proxyID) == ProxyAuto)
+}
+
+func (m *Manager) StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
 	m.mu.Lock()
 	if m.running || updateInProgress(m.state.State) {
 		status := m.state
@@ -410,11 +425,12 @@ func (m *Manager) StartUpdateWithProxyURL(proxyID, customProxyURL string) (Updat
 	m.mu.Unlock()
 	m.persistStatus(status)
 
-	go m.runUpdate(proxyID, customProxyURL)
+	go m.runUpdate(proxyID, customProxyURL, allowProxyFallback)
 	return status, nil
 }
 
-func (m *Manager) runUpdate(proxyID, customProxyURL string) {
+func (m *Manager) runUpdate(proxyID, customProxyURL string, allowProxyFallback ...bool) {
+	canFallback := len(allowProxyFallback) > 0 && allowProxyFallback[0]
 	release, proxy, err := m.fetchReleaseWithProxyURL(proxyID, customProxyURL)
 	if err != nil {
 		m.fail(err)
@@ -469,13 +485,20 @@ func (m *Manager) runUpdate(proxyID, customProxyURL string) {
 		return
 	}
 
-	// The metadata request may use auto mode to find a working entry. Keep that
-	// concrete entry for the entire binary download; rotating after a response
-	// body has started can leave a partial binary and make the next endpoint
-	// unable to resume the same transfer. Once the binary is complete, the small
-	// checksum file may safely use the remaining auto-mode entries if needed.
-	checksumProxies := checksumProxyCandidates(proxyID, customProxyURL, proxy)
-	downloadPath, err := m.downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checksumAsset, downloadDir, latestVersion, proxy, checksumProxies)
+	// Keep the selected entry for a healthy transfer. Only after the request has
+	// ended with an HTTP/read/low-speed failure may auto mode try another entry;
+	// it never changes the endpoint while an active response is still streaming.
+	var binaryProxies []githubProxy
+	if canFallback {
+		binaryProxies = updateProxyCandidates(customProxyURL, proxy)
+	} else {
+		binaryProxies = []githubProxy{proxy}
+	}
+	checksumProxies := []githubProxy{proxy}
+	if canFallback {
+		checksumProxies = updateProxyCandidates(customProxyURL, proxy)
+	}
+	downloadPath, err := m.downloadAndVerifyAssetsWithProxies(binaryAsset, checksumAsset, downloadDir, latestVersion, binaryProxies, checksumProxies)
 	if err != nil {
 		m.fail(err)
 		return
@@ -566,6 +589,36 @@ func (m *Manager) getJSON(path string, target any, networkCode ErrorCode) error 
 	return m.getJSONWithProxy(githubProxy{}, path, target, networkCode)
 }
 
+func httpClientForProxy(base *http.Client, proxy githubProxy) (*http.Client, error) {
+	if proxy.socks5Addr == "" {
+		return base, nil
+	}
+
+	dialer, err := xproxy.SOCKS5("tcp", proxy.socks5Addr, nil, &net.Dialer{Timeout: defaultRequestTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("创建 SOCKS5 GitHub 代理失败: %w", err)
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if base.Transport != nil {
+		baseTransport, ok := base.Transport.(*http.Transport)
+		if !ok {
+			return nil, errors.New("当前 HTTP 客户端传输层不支持 SOCKS5 代理")
+		}
+		transport = baseTransport.Clone()
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if contextDialer, ok := dialer.(xproxy.ContextDialer); ok {
+			return contextDialer.DialContext(ctx, network, address)
+		}
+		return dialer.Dial(network, address)
+	}
+
+	client := *base
+	client.Transport = transport
+	return &client, nil
+}
+
 func (m *Manager) getJSONWithProxy(proxy githubProxy, path string, target any, networkCode ErrorCode) error {
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rewriteGitHubURL(proxy, m.apiBaseURL+path), nil)
 	if err != nil {
@@ -573,7 +626,11 @@ func (m *Manager) getJSONWithProxy(proxy githubProxy, path string, target any, n
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("User-Agent", "VoHive-Updater")
-	response, err := m.httpClient.Do(request)
+	client, err := httpClientForProxy(m.httpClient, proxy)
+	if err != nil {
+		return newUpdateError(networkCode, "创建 GitHub 代理客户端失败", err)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return newUpdateError(networkCode, "访问 GitHub 失败", err)
 	}
@@ -687,19 +744,34 @@ func findAssets(assets []Asset, binaryName string) (Asset, Asset, error) {
 }
 
 func (m *Manager) downloadAndVerifyAssets(binaryAsset, checksumAsset Asset, directory, targetVersion string, proxy githubProxy) (string, error) {
-	return m.downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checksumAsset, directory, targetVersion, proxy, []githubProxy{proxy})
+	return m.downloadAndVerifyAssetsWithProxies(binaryAsset, checksumAsset, directory, targetVersion, []githubProxy{proxy}, []githubProxy{proxy})
 }
 
 func (m *Manager) downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checksumAsset Asset, directory, targetVersion string, proxy githubProxy, checksumProxies []githubProxy) (string, error) {
-	if proxy.ID == "" {
+	return m.downloadAndVerifyAssetsWithProxies(binaryAsset, checksumAsset, directory, targetVersion, []githubProxy{proxy}, checksumProxies)
+}
+
+func (m *Manager) downloadAndVerifyAssetsWithProxies(binaryAsset, checksumAsset Asset, directory, targetVersion string, binaryProxies, checksumProxies []githubProxy) (string, error) {
+	if len(binaryProxies) == 0 || binaryProxies[0].ID == "" {
 		return "", newUpdateError(ErrInvalidGitHubProxy, "未知的 GitHub 加速入口", nil)
 	}
 
-	m.setState(StateDownloading, 0, fmt.Sprintf("正在通过 %s 下载更新", proxy.Name), targetVersion)
-	downloadPath, err := m.downloadBinaryWithProxy(binaryAsset, directory, targetVersion, proxy)
-	if err != nil {
-		logger.Warn("GitHub 更新资产下载失败，本次任务保持当前入口", "proxy", proxy.ID, "err", err)
-		return "", err
+	var downloadPath string
+	var lastErr error
+	for index, proxy := range binaryProxies {
+		m.setState(StateDownloading, 0, fmt.Sprintf("正在通过 %s 下载更新", proxy.Name), targetVersion)
+		downloadPath, lastErr = m.downloadBinaryWithProxy(binaryAsset, directory, targetVersion, proxy)
+		if lastErr == nil {
+			break
+		}
+		if index+1 < len(binaryProxies) {
+			nextProxy := binaryProxies[index+1]
+			m.setState(StateDownloading, 0, fmt.Sprintf("%s 下载失败，已结束当前请求，切换到 %s", proxy.Name, nextProxy.Name), targetVersion)
+			logger.Warn("GitHub 更新资产下载入口失败，结束当前请求后切换入口", "proxy", proxy.ID, "next_proxy", nextProxy.ID, "err", lastErr)
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
 	}
 
 	checksum, checksumProxy, err := m.downloadChecksumFromProxies(checksumAsset, checksumProxies, targetVersion)
@@ -708,7 +780,7 @@ func (m *Manager) downloadAndVerifyAssetsWithChecksumProxies(binaryAsset, checks
 	}
 	if err != nil {
 		_ = os.Remove(downloadPath)
-		logger.Warn("GitHub 更新资产校验失败，本次任务保持当前版本", "proxy", proxy.ID, "err", err)
+		logger.Warn("GitHub 更新资产校验失败，本次任务保持当前版本", "proxy", binaryProxies[0].ID, "err", err)
 		return "", err
 	}
 
@@ -787,6 +859,9 @@ func (m *Manager) downloadBinaryWithProxy(asset Asset, directory, targetVersion 
 		} else {
 			lastErr = err
 		}
+		if errors.Is(lastErr, errDownloadTooSlow) {
+			return "", lastErr
+		}
 
 		if attempt == defaultDownloadRetryAttempts {
 			break
@@ -825,7 +900,11 @@ func (m *Manager) downloadBinaryAttempt(asset Asset, path string, offset int64, 
 		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
 
-	response, err := m.downloadHTTPClient.Do(request)
+	client, err := httpClientForProxy(m.downloadHTTPClient, proxy)
+	if err != nil {
+		return newUpdateError(ErrDownloadFailed, "创建二进制下载代理客户端失败", err)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return newUpdateError(ErrDownloadFailed, "下载二进制失败", err)
 	}
@@ -885,7 +964,7 @@ func (m *Manager) downloadBinaryAttempt(asset Asset, path string, offset int64, 
 		target:  targetVersion,
 		written: startOffset,
 	}
-	reader := &idleTimeoutReader{body: response.Body, timeout: defaultDownloadIdleTimeout}
+	reader := newDownloadBodyReader(response.Body, defaultDownloadIdleTimeout, defaultDownloadSpeedWindow, defaultMinimumDownloadRate)
 	_, copyErr := io.Copy(writer, io.LimitReader(reader, m.maxBinarySize-startOffset+1))
 	if err := file.Sync(); err != nil && copyErr == nil {
 		copyErr = err
@@ -895,7 +974,11 @@ func (m *Manager) downloadBinaryAttempt(asset Asset, path string, offset int64, 
 	}
 	closeFile = false
 	if copyErr != nil {
-		return newUpdateError(ErrDownloadFailed, "写入二进制临时文件失败", copyErr)
+		message := "写入二进制临时文件失败"
+		if errors.Is(copyErr, errDownloadTooSlow) {
+			message = "下载速度过低，已中止当前更新入口"
+		}
+		return newUpdateError(ErrDownloadFailed, message, copyErr)
 	}
 
 	info, err := os.Stat(path)
@@ -939,6 +1022,45 @@ func (r *idleTimeoutReader) Read(p []byte) (int, error) {
 }
 
 func (r *idleTimeoutReader) Close() error { return r.body.Close() }
+
+type downloadBodyReader struct {
+	*idleTimeoutReader
+	speedWindow time.Duration
+	minimumRate int64
+	windowStart time.Time
+	windowBytes int64
+}
+
+func newDownloadBodyReader(body io.ReadCloser, idleTimeout, speedWindow time.Duration, minimumRate int64) *downloadBodyReader {
+	return &downloadBodyReader{
+		idleTimeoutReader: &idleTimeoutReader{body: body, timeout: idleTimeout},
+		speedWindow:       speedWindow,
+		minimumRate:       minimumRate,
+		windowStart:       time.Now(),
+	}
+}
+
+func (r *downloadBodyReader) Read(p []byte) (int, error) {
+	n, err := r.idleTimeoutReader.Read(p)
+	if n <= 0 || err != nil || r.minimumRate <= 0 || r.speedWindow <= 0 {
+		return n, err
+	}
+
+	r.windowBytes += int64(n)
+	elapsed := time.Since(r.windowStart)
+	if elapsed < r.speedWindow {
+		return n, nil
+	}
+
+	minimumBytes := (r.minimumRate * elapsed.Nanoseconds()) / int64(time.Second)
+	if r.windowBytes < minimumBytes {
+		_ = r.body.Close()
+		return n, fmt.Errorf("%w: %d bytes/s", errDownloadTooSlow, (r.windowBytes*int64(time.Second))/elapsed.Nanoseconds())
+	}
+	r.windowStart = time.Now()
+	r.windowBytes = 0
+	return n, nil
+}
 
 func fileSize(path string) (int64, error) {
 	info, err := os.Stat(path)
@@ -1032,7 +1154,11 @@ func (m *Manager) downloadChecksumAttempt(asset Asset, proxy githubProxy) (strin
 	request.Header.Set("Accept", "text/plain")
 	request.Header.Set("Accept-Encoding", "identity")
 	request.Header.Set("User-Agent", "VoHive-Updater")
-	response, err := m.downloadHTTPClient.Do(request)
+	client, err := httpClientForProxy(m.downloadHTTPClient, proxy)
+	if err != nil {
+		return "", newUpdateError(ErrDownloadFailed, "创建 SHA-256 下载代理客户端失败", err)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "下载 SHA-256 文件失败", err)
 	}
@@ -1043,7 +1169,7 @@ func (m *Manager) downloadChecksumAttempt(asset Asset, proxy githubProxy) (strin
 	if response.StatusCode != http.StatusOK {
 		return "", newUpdateError(ErrDownloadFailed, fmt.Sprintf("SHA-256 下载返回 HTTP %d", response.StatusCode), nil)
 	}
-	reader := &idleTimeoutReader{body: response.Body, timeout: defaultDownloadIdleTimeout}
+	reader := &idleTimeoutReader{body: response.Body, timeout: defaultChecksumIdleTimeout}
 	data, err := io.ReadAll(io.LimitReader(reader, 64*1024))
 	if err != nil {
 		return "", newUpdateError(ErrDownloadFailed, "读取 SHA-256 文件失败", err)

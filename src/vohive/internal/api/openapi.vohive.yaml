@@ -2047,6 +2047,13 @@ components:
         proxy_id:
           type: string
           default: auto
+        proxy_url:
+          type: string
+          description: 自定义 HTTP(S) 加速地址或 socks5:// 代理地址
+        allow_proxy_fallback:
+          type: boolean
+          default: false
+          description: 自动模式下，当前下载或 SHA-256 请求结束并失败/持续低速后是否切换到下一个入口
 
     SystemUpdateStatus:
       type: object

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -676,6 +677,16 @@ func TestRunUpdatePinsProxySelectedDuringAutoCheck(t *testing.T) {
 	}
 }
 
+func TestDownloadBodyReaderRejectsSustainedLowRate(t *testing.T) {
+	body := &pacedReader{delay: 25 * time.Millisecond}
+	reader := newDownloadBodyReader(body, time.Second, 20*time.Millisecond, 1000)
+	buffer := make([]byte, 1)
+	_, err := reader.Read(buffer)
+	if !errors.Is(err, errDownloadTooSlow) {
+		t.Fatalf("low-rate body error=%v, want errDownloadTooSlow", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -697,6 +708,18 @@ func (r *failAfterReader) Read(p []byte) (int, error) {
 }
 
 func (r *failAfterReader) Close() error { return nil }
+
+type pacedReader struct {
+	delay time.Duration
+}
+
+func (r *pacedReader) Read(p []byte) (int, error) {
+	time.Sleep(r.delay)
+	p[0] = 'x'
+	return 1, nil
+}
+
+func (r *pacedReader) Close() error { return nil }
 
 func bytesForTest(size int) []byte {
 	payload := make([]byte, size)

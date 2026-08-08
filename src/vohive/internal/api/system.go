@@ -49,8 +49,9 @@ func (s *Server) handleUpdateProxies(c *gin.Context) {
 // handleApplyUpdate 应用系统更新
 func (s *Server) handleApplyUpdate(c *gin.Context) {
 	var request struct {
-		ProxyID  string `json:"proxy_id"`
-		ProxyURL string `json:"proxy_url"`
+		ProxyID             string `json:"proxy_id"`
+		ProxyURL            string `json:"proxy_url"`
+		AllowProxyFallback  bool   `json:"allow_proxy_fallback"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil && !errors.Is(err, io.EOF) {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -60,7 +61,7 @@ func (s *Server) handleApplyUpdate(c *gin.Context) {
 		})
 		return
 	}
-	status, err := updater.StartUpdateWithProxyURL(request.ProxyID, request.ProxyURL)
+	status, err := updater.StartUpdateWithProxyURLAndFallback(request.ProxyID, request.ProxyURL, request.AllowProxyFallback)
 	if err != nil {
 		logger.Error("应用更新失败", "err", err)
 		writeUpdateError(c, err)

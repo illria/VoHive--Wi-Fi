@@ -323,11 +323,12 @@ export const systemService = {
       return res.data
     })
   },
-  applyUpdate(proxyID = 'auto', proxyURL = '') {
+  applyUpdate(proxyID = 'auto', proxyURL = '', allowProxyFallback = false) {
     return callService(async () => {
       const res = await api.post<UpdateStatus>('/system/update/apply', {
         proxy_id: proxyID,
-        ...(proxyURL ? { proxy_url: proxyURL } : {})
+        ...(proxyURL ? { proxy_url: proxyURL } : {}),
+        allow_proxy_fallback: allowProxyFallback
       })
       return res.data
     })

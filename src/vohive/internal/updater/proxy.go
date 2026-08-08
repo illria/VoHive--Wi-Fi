@@ -2,7 +2,9 @@ package updater
 
 import (
 	"errors"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -15,7 +17,8 @@ type ProxyOption struct {
 
 type githubProxy struct {
 	ProxyOption
-	prefix string
+	prefix     string
+	socks5Addr string
 }
 
 const (
@@ -30,8 +33,9 @@ var (
 	errEmptyCustomProxyURL       = errors.New("地址不能为空")
 	errCustomProxyURLControlChar = errors.New("地址不能包含换行符")
 	errCustomProxyURLSyntax      = errors.New("地址格式无效")
-	errCustomProxyURLScheme      = errors.New("地址必须使用 http 或 https")
+	errCustomProxyURLScheme      = errors.New("地址必须使用 http、https 或 socks5")
 	errCustomProxyURLHost        = errors.New("地址必须包含主机名")
+	errCustomProxyURLPort        = errors.New("SOCKS5 地址必须包含有效端口")
 	errCustomProxyURLShape       = errors.New("地址不能包含用户名、查询参数或片段")
 )
 
@@ -45,7 +49,8 @@ func normalizeProxyID(proxyID string) string {
 
 // Public proxy services are intentionally fallback options, not mandatory
 // dependencies. Auto mode tries each one while resolving release metadata,
-// then pins the first successful entry for the rest of the update task.
+// then uses the first successful entry for assets and only falls back after a
+// completed asset request fails or stays below the minimum download rate.
 var githubProxyCatalog = []githubProxy{
 	{
 		ProxyOption: ProxyOption{ID: "ghfast", Name: "ghfast.top", Description: "公共加速入口，适合 GitHub API 和 Release 下载"},
@@ -70,7 +75,7 @@ func GitHubProxyOptions() []ProxyOption {
 	options = append(options, ProxyOption{
 		ID:          ProxyAuto,
 		Name:        "自动（推荐）",
-		Description: "检查阶段自动选择入口，下载和校验阶段保持不变",
+		Description: "先使用检查成功的入口，下载或校验持续失败/低速时再切换",
 	})
 	for _, proxy := range githubProxyCatalog {
 		options = append(options, proxy.ProxyOption)
@@ -78,7 +83,7 @@ func GitHubProxyOptions() []ProxyOption {
 	options = append(options, ProxyOption{
 		ID:          ProxyCustom,
 		Name:        customProxyName,
-		Description: "填写自己的 HTTP(S) GitHub 加速地址",
+		Description: "填写自己的 HTTP(S) 加速地址或 socks5://代理",
 	})
 	return options
 }
@@ -91,7 +96,7 @@ func proxyCandidates(proxyID string) ([]githubProxy, bool) {
 func proxyCandidatesWithURL(proxyID, customURL string) ([]githubProxy, error) {
 	proxyID = normalizeProxyID(proxyID)
 	if proxyID == ProxyCustom {
-		prefix, err := normalizeCustomProxyURL(customURL)
+		prefix, socks5Addr, err := parseCustomProxyURL(customURL)
 		if err != nil {
 			return nil, newUpdateError(ErrInvalidGitHubProxy, "自定义 GitHub 加速地址无效", err)
 		}
@@ -101,7 +106,8 @@ func proxyCandidatesWithURL(proxyID, customURL string) ([]githubProxy, error) {
 				Name:        customProxyName,
 				Description: prefix,
 			},
-			prefix: prefix,
+			prefix:     prefix,
+			socks5Addr: socks5Addr,
 		}}, nil
 	}
 	if proxyID == "" || proxyID == ProxyAuto {
@@ -131,8 +137,16 @@ func proxyByID(proxyID string) (githubProxy, bool) {
 // binary's resumable transfer while recovering from a proxy that serves the
 // binary but stalls or rejects the small checksum asset.
 func checksumProxyCandidates(proxyID, customURL string, selected githubProxy) []githubProxy {
+	return updateProxyCandidatesForMode(customURL, selected, normalizeProxyID(proxyID) == ProxyAuto)
+}
+
+func updateProxyCandidates(customURL string, selected githubProxy) []githubProxy {
+	return updateProxyCandidatesForMode(customURL, selected, true)
+}
+
+func updateProxyCandidatesForMode(customURL string, selected githubProxy, allowFallback bool) []githubProxy {
 	candidates := []githubProxy{selected}
-	if normalizeProxyID(proxyID) != ProxyAuto {
+	if !allowFallback {
 		return candidates
 	}
 
@@ -150,27 +164,44 @@ func checksumProxyCandidates(proxyID, customURL string, selected githubProxy) []
 }
 
 func normalizeCustomProxyURL(rawURL string) (string, error) {
+	normalized, _, err := parseCustomProxyURL(rawURL)
+	return normalized, err
+}
+
+func parseCustomProxyURL(rawURL string) (normalized, socks5Addr string, err error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return "", errEmptyCustomProxyURL
+		return "", "", errEmptyCustomProxyURL
 	}
 	if strings.ContainsAny(rawURL, "\r\n") {
-		return "", errCustomProxyURLControlChar
+		return "", "", errCustomProxyURLControlChar
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return "", errCustomProxyURLSyntax
+		return "", "", errCustomProxyURLSyntax
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", errCustomProxyURLScheme
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "socks5" && scheme != "socks5h" {
+		return "", "", errCustomProxyURLScheme
 	}
 	if parsed.Host == "" {
-		return "", errCustomProxyURLHost
+		return "", "", errCustomProxyURLHost
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errCustomProxyURLShape
+		return "", "", errCustomProxyURLShape
 	}
-	return strings.TrimRight(rawURL, "/") + "/", nil
+	if scheme == "socks5" || scheme == "socks5h" {
+		if parsed.Path != "" && parsed.Path != "/" {
+			return "", "", errCustomProxyURLShape
+		}
+		portText := parsed.Port()
+		port, portErr := strconv.Atoi(portText)
+		if parsed.Hostname() == "" || portErr != nil || port < 1 || port > 65535 {
+			return "", "", errCustomProxyURLPort
+		}
+		return scheme + "://" + net.JoinHostPort(parsed.Hostname(), strconv.Itoa(port)), net.JoinHostPort(parsed.Hostname(), strconv.Itoa(port)), nil
+	}
+	return strings.TrimRight(rawURL, "/") + "/", "", nil
 }
 
 func rewriteGitHubURL(proxy githubProxy, rawURL string) string {

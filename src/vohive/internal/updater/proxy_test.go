@@ -54,6 +54,24 @@ func TestChecksumProxyCandidatesKeepSelectedEntryFirst(t *testing.T) {
 	}
 }
 
+func TestUpdateProxyCandidatesKeepSelectedEntryFirst(t *testing.T) {
+	selected := githubProxyCatalog[2]
+	candidates := updateProxyCandidates("", selected)
+	if len(candidates) != len(githubProxyCatalog) {
+		t.Fatalf("candidate count=%d, want=%d", len(candidates), len(githubProxyCatalog))
+	}
+	if candidates[0].ID != selected.ID {
+		t.Fatalf("first update entry=%q, want selected %q", candidates[0].ID, selected.ID)
+	}
+	seen := make(map[string]bool, len(candidates))
+	for _, candidate := range candidates {
+		if seen[candidate.ID] {
+			t.Fatalf("duplicate update entry %q", candidate.ID)
+		}
+		seen[candidate.ID] = true
+	}
+}
+
 func TestProxyCandidates(t *testing.T) {
 	auto, ok := proxyCandidates(ProxyAuto)
 	if !ok || len(auto) < 3 {
@@ -101,12 +119,26 @@ func TestCustomProxyURL(t *testing.T) {
 		t.Fatalf("custom API URL = %q, want %q", got, want)
 	}
 
+	socksCandidates, err := proxyCandidatesWithURL(ProxyCustom, " socks5://192.168.3.221:7744 ")
+	if err != nil {
+		t.Fatalf("SOCKS5 proxy should be accepted: %v", err)
+	}
+	if len(socksCandidates) != 1 || socksCandidates[0].prefix != "" || socksCandidates[0].socks5Addr != "192.168.3.221:7744" {
+		t.Fatalf("unexpected SOCKS5 proxy: %+v", socksCandidates)
+	}
+	if got := rewriteGitHubURL(socksCandidates[0], "https://api.github.com/repos/illria/VoHive--Wi-Fi/releases/latest"); got != "https://api.github.com/repos/illria/VoHive--Wi-Fi/releases/latest" {
+		t.Fatalf("SOCKS5 proxy should keep the original URL, got %q", got)
+	}
+
 	for _, invalid := range []string{
 		"",
 		"github.com/proxy",
 		"ftp://proxy.example.com/",
 		"https://proxy.example.com/?token=secret",
 		"https://user:pass@proxy.example.com/",
+		"socks5://192.168.3.221",
+		"socks5://192.168.3.221:0",
+		"socks5://192.168.3.221:7744/path",
 	} {
 		if _, err := proxyCandidatesWithURL(ProxyCustom, invalid); err == nil {
 			t.Fatalf("custom proxy %q should be rejected", invalid)

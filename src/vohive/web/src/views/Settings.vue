@@ -460,8 +460,9 @@ async function doApplyUpdate() {
       { confirmButtonText: '立即更新', cancelButtonText: '取消', type: 'warning' }
     )
     applyingUpdate.value = true
-    // Auto mode resolves a concrete entry during the check. Reuse that entry
-    // for apply so the update task does not select a different route again.
+    // Auto mode keeps the entry that succeeded during the check as the first
+    // download route. The updater may switch only after that request ends with
+    // a failure or sustained low speed; it never changes route mid-stream.
     const proxyForApply = selectedUpdateProxy.value === 'auto'
       ? (updateInfo.value.proxy_id || 'auto')
       : selectedUpdateProxy.value
@@ -472,7 +473,8 @@ async function doApplyUpdate() {
       ElMessage.warning('请先填写自定义 GitHub 加速地址')
       return
     }
-    const res = await systemService.applyUpdate(proxyForApply, proxyURLForApply)
+    const allowProxyFallback = selectedUpdateProxy.value === 'auto'
+    const res = await systemService.applyUpdate(proxyForApply, proxyURLForApply, allowProxyFallback)
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
     updateStatus.value = res.data
     ElMessage.success('更新任务已开始，请等待服务重启')
@@ -567,7 +569,7 @@ onBeforeUnmount(() => {
               <div class="mt-3 flex flex-col gap-2 border-t border-gray-200 pt-3 dark:border-white/10 sm:flex-row sm:items-center sm:justify-between">
                 <div class="min-w-0">
                   <div class="text-xs font-semibold text-gray-600 dark:text-gray-300">GitHub 更新入口</div>
-                  <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">自动模式只在检查阶段选择入口，开始下载后保持不变</div>
+                  <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">自动模式先使用检查成功的入口；请求失败或持续低速结束后才切换</div>
                 </div>
                 <el-select
                   class="w-full sm:w-72"
@@ -594,12 +596,12 @@ onBeforeUnmount(() => {
                   v-model="customUpdateProxyURL"
                   clearable
                   size="small"
-                  placeholder="例如 https://ghproxy.example.com/"
+                  placeholder="例如 https://ghproxy.example.com/ 或 socks5://192.168.3.221:7744"
                   @change="persistCustomUpdateProxy()"
                   @blur="persistCustomUpdateProxy()"
                 />
                 <div class="mt-2 text-[11px] text-blue-700/80 dark:text-blue-200/80">
-                  填写加速地址前缀，系统会在后面拼接 GitHub API 和 Release 地址；支持 HTTP(S)，例如 https://你的代理地址/
+                  HTTP(S) 填写加速地址前缀；也支持 SOCKS5，例如 socks5://192.168.3.221:7744。SOCKS5 仅填写服务器地址和端口。
                 </div>
               </div>
             </div>
