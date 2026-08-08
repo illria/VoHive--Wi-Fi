@@ -30,10 +30,30 @@ func TestEsimProfileNoteCRUD(t *testing.T) {
 		t.Fatalf("notes = %#v, error=%v", notes, err)
 	}
 
+	if err := UpsertEsimProfileExpiry("iccid-a", "2026-08-15"); err != nil {
+		t.Fatalf("UpsertEsimProfileExpiry() error=%v", err)
+	}
+	expiries, err := GetEsimProfileExpiryDates([]string{"iccid-a", "missing"})
+	if err != nil || expiries["iccid-a"] != "2026-08-15" {
+		t.Fatalf("expiries = %#v, error=%v", expiries, err)
+	}
+
 	if err := UpsertEsimProfileNote("iccid-a", " "); err != nil {
 		t.Fatalf("clear note error=%v", err)
 	}
 	if got, err := GetEsimProfileNote("iccid-a"); err != nil || got != "" {
 		t.Fatalf("cleared note = %q, error=%v", got, err)
+	}
+	if expiries, err := GetEsimProfileExpiryDates([]string{"iccid-a"}); err != nil || expiries["iccid-a"] != "2026-08-15" {
+		t.Fatalf("expiry should survive note clear, expiries=%#v error=%v", expiries, err)
+	}
+	if err := UpsertEsimProfileExpiry("iccid-a", " "); err != nil {
+		t.Fatalf("clear expiry error=%v", err)
+	}
+	if expiries, err := GetEsimProfileExpiryDates([]string{"iccid-a"}); err != nil || len(expiries) != 0 {
+		t.Fatalf("cleared expiry = %#v, error=%v", expiries, err)
+	}
+	if _, err := NormalizeEsimProfileExpiryDate("2026/08/15"); err == nil {
+		t.Fatal("invalid expiry date should return an error")
 	}
 }

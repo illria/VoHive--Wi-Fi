@@ -266,6 +266,8 @@ export type EsimProfileItem = {
   state_text: string
   class_text?: string
   note?: string
+  phone_number?: string
+  expiry_date?: string
 }
 
 export type EsimEUICCProfiles = {

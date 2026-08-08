@@ -240,6 +240,8 @@ type ProfileItem struct {
 	StateText           string `json:"state_text"`
 	ClassText           string `json:"class_text,omitempty"`
 	Note                string `json:"note,omitempty"`
+	PhoneNumber         string `json:"phone_number,omitempty"`
+	ExpiryDate          string `json:"expiry_date,omitempty"`
 }
 
 // EUICCProfiles 按 eUICC 分组的 profile 列表

@@ -1041,6 +1041,54 @@ func GetSIMCardPhoneNumberByIMSI(imsi string) (string, error) {
 	return strings.TrimSpace(sub.PhoneNumber), nil
 }
 
+// GetPhoneNumberByICCID resolves the phone number attached to an eSIM
+// profile. Current subscriptions are preferred, followed by the SIM identity
+// table and finally the staging table used before IMSI discovery completes.
+func GetPhoneNumberByICCID(iccid string) (string, error) {
+	iccid = strings.TrimSpace(iccid)
+	if DB == nil || iccid == "" {
+		return "", nil
+	}
+
+	var sub SIMSubscription
+	err := DB.Select("phone_number").
+		Where("current_iccid = ? AND COALESCE(phone_number, '') <> ''", iccid).
+		Order("updated_at DESC").
+		Limit(1).
+		First(&sub).Error
+	if err == nil {
+		return strings.TrimSpace(sub.PhoneNumber), nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+
+	var sim SIMCard
+	err = DB.Select("imsi").Where("iccid = ?", iccid).Limit(1).First(&sim).Error
+	if err == nil && strings.TrimSpace(sim.IMSI) != "" {
+		if phone, phoneErr := GetSIMCardPhoneNumberByIMSI(sim.IMSI); phoneErr != nil {
+			return "", phoneErr
+		} else if strings.TrimSpace(phone) != "" {
+			return strings.TrimSpace(phone), nil
+		}
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+
+	var pending PendingPhoneNumber
+	err = DB.Select("phone_number").
+		Where("iccid = ? AND COALESCE(phone_number, '') <> ''", iccid).
+		Limit(1).
+		First(&pending).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(pending.PhoneNumber), nil
+}
+
 // GetPhoneNumberByIMSIOrICCID 先按 IMSI 查 sim_subscriptions，空则按 ICCID 查 staging。
 func GetPhoneNumberByIMSIOrICCID(imsi, iccid string) (string, error) {
 	if phone, err := GetSIMCardPhoneNumberByIMSI(imsi); err != nil {

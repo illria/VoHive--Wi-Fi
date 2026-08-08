@@ -388,6 +388,14 @@ export const devicesService = {
       return true
     })
   },
+  updateEsimProfileExpiry(id: string, iccid: string, expiryDate: string) {
+    return callService(async () => {
+      const res = await withEsimBusyRetry(() => api.patch<{ expiry_date?: string }>(`/devices/${id}/esim/profiles/${iccid}/expiry`, {
+        expiry_date: expiryDate
+      }))
+      return res.data?.expiry_date || ''
+    })
+  },
   deleteEsimProfile(id: string, iccid: string, aidHex: string) {
     return callService(async () => {
       const res = await withEsimBusyRetry(() => api.delete<DeleteEsimProfileResponse>(`/devices/${id}/esim/profiles/${iccid}`, {

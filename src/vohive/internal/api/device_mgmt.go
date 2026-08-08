@@ -1710,7 +1710,7 @@ func (s *Server) handleEsimListProfiles(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	enrichEsimProfileNotes(profiles)
+	enrichEsimProfileMetadata(profiles)
 	c.JSON(http.StatusOK, profiles)
 }
 
@@ -2033,7 +2033,7 @@ func (s *Server) handleEsimGetOverview(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	enrichEsimProfileNotes(overview.Profiles)
+	enrichEsimProfileMetadata(overview.Profiles)
 
 	c.JSON(http.StatusOK, overview)
 }

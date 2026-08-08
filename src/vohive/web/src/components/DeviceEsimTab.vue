@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { EsimChipInfo, EsimEUICCProfiles, EsimNotificationItem, EsimSpaceDelta } from '../types/api'
+import type { EsimChipInfo, EsimEUICCProfiles, EsimNotificationItem, EsimProfileItem, EsimSpaceDelta } from '../types/api'
 import { devicesService } from '../services/devices'
 import { errorMessage } from '../services/http'
 import { api } from '../stores/auth'
@@ -39,6 +39,9 @@ const loading = ref(false)
 const profilesRefreshing = ref(false)
 const chipInfo = ref<EsimChipInfo | null>(null)
 const profiles = ref<EsimEUICCProfiles[]>([])
+const expiryDrafts = ref<Record<string, string>>({})
+const expirySaving = ref<string | null>(null)
+const expiryProfiles = computed<EsimProfileItem[]>(() => profiles.value.flatMap((group) => group.profiles || []))
 
 // 操作状态
 const switching = ref<string | null>(null)
@@ -199,6 +202,29 @@ function showRecentSpaceDelta(aidHex: string, spaceDelta?: EsimSpaceDelta) {
   }, 75000)
 }
 
+function syncExpiryDrafts(nextProfiles: EsimEUICCProfiles[]) {
+  const next: Record<string, string> = {}
+  for (const group of nextProfiles) {
+    for (const profile of group.profiles || []) {
+      next[profile.iccid] = profile.expiry_date || ''
+    }
+  }
+  expiryDrafts.value = next
+}
+
+function setExpiryDraft(iccid: string, value: unknown) {
+  expiryDrafts.value[iccid] = typeof value === 'string' ? value : ''
+}
+
+function profileExpiryValue(profile: EsimProfileItem): string {
+  return expiryDrafts.value[profile.iccid] ?? profile.expiry_date ?? ''
+}
+
+function profileExpirySummary(profile: EsimProfileItem): string {
+  const expiryDate = profileExpiryValue(profile)
+  return expiryDate ? `到期 ${expiryDate} · 提前 7 天推送提醒` : '永久有效 · 不发送到期提醒'
+}
+
 async function fetchNotifications() {
   notificationsLoading.value = true
   const result = await devicesService.getEsimNotifications(props.deviceId)
@@ -284,6 +310,7 @@ async function fetchOverview(refresh = false) {
     if (!result.ok) throw result.error
     chipInfo.value = result.data.chipInfo
     profiles.value = result.data.profiles
+    syncExpiryDrafts(result.data.profiles)
     downloadForm.value.aidHex = pickNextDownloadAid(chipInfo.value, currentAidHex)
   } catch (e: unknown) {
     if (result.ok === false && result.error.code === 'ERR_CANCELED') {
@@ -307,6 +334,7 @@ async function fetchProfiles(refresh = false) {
   try {
     if (!result.ok) throw result.error
     profiles.value = result.data
+    syncExpiryDrafts(result.data)
   } catch (e: unknown) {
     ElMessage.error(errorMessage(e, '获取 eSIM Profiles 失败'))
   } finally {
@@ -396,6 +424,21 @@ async function saveProfileNote(iccid: string) {
     ElMessage.error(errorMessage(e, '保存备注失败'))
   } finally {
     noteSaving.value = null
+  }
+}
+
+async function saveProfileExpiry(iccid: string) {
+  const expiryDate = expiryDrafts.value[iccid] || ''
+  expirySaving.value = iccid
+  try {
+    const result = await devicesService.updateEsimProfileExpiry(props.deviceId, iccid, expiryDate)
+    if (!result.ok) throw new Error(result.error.message || '保存到期日期失败')
+    ElMessage.success(expiryDate ? '到期日期已保存，将在到期前 7 天推送提醒' : '已设置为永久有效')
+    await fetchProfiles(false)
+  } catch (e: unknown) {
+    ElMessage.error(errorMessage(e, '保存到期日期失败'))
+  } finally {
+    expirySaving.value = null
   }
 }
 
@@ -538,6 +581,7 @@ watch(
     clearRecentSpaceDelta()
     chipInfo.value = null
     profiles.value = []
+    expiryDrafts.value = {}
     downloadForm.value.aidHex = ''
     downloadForm.value.imei = ''
     fetchOverview()
@@ -827,6 +871,73 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </el-dialog>
+
+      <!-- 到期通知中心 -->
+      <div v-if="chipInfo" class="ui-panel-muted p-4">
+        <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+          <div class="flex items-start gap-2">
+            <div class="w-7 h-7 rounded-lg bg-amber-50 dark:bg-amber-500/10 flex items-center justify-center text-amber-600 dark:text-amber-400 flex-shrink-0">
+              <el-icon size="16"><Alert24Regular /></el-icon>
+            </div>
+            <div>
+              <div class="text-sm font-bold text-gray-900 dark:text-white">到期通知中心</div>
+              <div class="text-[11px] text-gray-400 dark:text-gray-500">设置每个号码的到期日期，系统会在到期前 7 天通过已启用的推送渠道提醒</div>
+            </div>
+          </div>
+          <el-tag type="info" effect="plain" size="small">未设置日期 = 永久有效</el-tag>
+        </div>
+
+        <div v-if="expiryProfiles.length === 0" class="rounded-xl border border-dashed border-gray-200 dark:border-white/10 px-4 py-6 text-center text-xs text-gray-400">
+          当前没有可设置到期日期的 eSIM Profile
+        </div>
+        <div v-else class="space-y-2">
+          <div
+            v-for="profile in expiryProfiles"
+            :key="`expiry-${profile.iccid}`"
+            class="rounded-xl border border-gray-100 dark:border-white/10 bg-white/60 dark:bg-white/[0.03] px-3 py-3 flex flex-col lg:flex-row lg:items-center gap-3"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="profile.state === 1 ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'" />
+                <span class="text-sm font-medium text-gray-900 dark:text-white truncate">{{ profile.name || profile.iccid }}</span>
+                <el-tag size="small" :type="profileExpiryValue(profile) ? 'warning' : 'info'" effect="plain" class="flex-shrink-0">
+                  {{ profileExpiryValue(profile) ? '已设置' : '永久有效' }}
+                </el-tag>
+              </div>
+              <div class="mt-1 ml-4 text-xs text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
+                <span>号码：{{ profile.phone_number || '未读取到号码' }}</span>
+                <span class="font-mono transition-all" :class="{ 'blur-sm select-none': !showSensitive }">ICCID：{{ profile.iccid }}</span>
+              </div>
+              <div v-if="profile.note" class="mt-1 ml-4 text-xs text-blue-600 dark:text-blue-300 truncate" :title="profile.note">
+                备注：{{ profile.note }}
+              </div>
+              <div class="mt-1 ml-4 text-[11px] text-gray-400 dark:text-gray-500">
+                {{ profileExpirySummary(profile) }}
+              </div>
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-center gap-2 lg:w-auto">
+              <el-date-picker
+                :model-value="profileExpiryValue(profile)"
+                type="date"
+                value-format="YYYY-MM-DD"
+                format="YYYY-MM-DD"
+                clearable
+                placeholder="永久有效"
+                class="!w-full sm:!w-44"
+                @update:model-value="setExpiryDraft(profile.iccid, $event)"
+              />
+              <el-button
+                type="primary"
+                plain
+                :loading="expirySaving === profile.iccid"
+                @click="saveProfileExpiry(profile.iccid)"
+              >
+                保存
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- 下载新 Profile -->
       <div v-if="chipInfo" class="ui-panel-muted p-4">

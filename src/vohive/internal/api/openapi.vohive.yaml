@@ -1614,6 +1614,34 @@ paths:
         '404':
           $ref: '#/components/responses/ErrorMessage'
 
+  /devices/{device_id}/esim/profiles/{iccid}/expiry:
+    patch:
+      tags: [esim]
+      summary: 设置 eSIM Profile 到期日期
+      description: 未设置日期或提交空字符串时，Profile 视为永久有效；设置日期后会在到期前 7 天通过已启用通知渠道提醒。
+      parameters:
+        - $ref: '#/components/parameters/DeviceIDPath'
+        - $ref: '#/components/parameters/ICCIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EsimProfileExpiryRequest'
+      responses:
+        '200':
+          description: 保存成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/ErrorMessage'
+        '404':
+          $ref: '#/components/responses/ErrorMessage'
+        '500':
+          $ref: '#/components/responses/ErrorMessage'
+
   /devices/{device_id}/esim/profiles/{iccid}:
     patch:
       tags: [esim]
@@ -3326,6 +3354,13 @@ components:
           type: string
         class_text:
           type: string
+        note:
+          type: string
+        phone_number:
+          type: string
+        expiry_date:
+          type: string
+          format: date
 
     EsimNotificationItem:
       type: object
@@ -3484,6 +3519,14 @@ components:
           type: string
         aid_hex:
           type: string
+
+    EsimProfileExpiryRequest:
+      type: object
+      properties:
+        expiry_date:
+          type: string
+          format: date
+          description: 到期日期；提交空字符串表示永久有效。
 
     DeviceStatusResponse:
       type: object

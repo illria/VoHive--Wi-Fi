@@ -349,6 +349,12 @@ func main() {
 		}
 	}
 
+	expirySchedulerCtx, stopExpiryScheduler := context.WithCancel(context.Background())
+	defer stopExpiryScheduler()
+	if notifyMgr != nil {
+		notifyMgr.StartEsimExpiryScheduler(expirySchedulerCtx)
+	}
+
 	apiServer := api.New(cfg, pool, staticFS, proxyMgr, voiceGW, notifyMgr, configPath)
 	apiServer.SetRealtimeTraffic(realtimeTraffic)
 
@@ -404,6 +410,7 @@ func main() {
 		}
 
 		if notifyMgr != nil {
+			stopExpiryScheduler()
 			notifyMgr.Close()
 		}
 
