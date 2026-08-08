@@ -647,11 +647,10 @@ async function fetchAll() {
       selectedId.value = ''
     }
     
-    // 如果之前没有选中的id或者这次选中改变了，则加载详情
     const selectionChanged = prevSelected !== selectedId.value || (selectedDetail.value?.id || '') !== selectedId.value
-    if (selectionChanged) {
-      await fetchSelectedDetail(selectedId.value)
-    }
+    // 手动刷新同时重新请求当前设备详情，确保信号强度等实时字段立即更新。
+    await fetchSelectedDetail(selectedId.value)
+    // 如果之前没有选中的id或者这次选中改变了，则同步编辑配置
     if (selectionChanged || !editConfig.value) await syncEditConfigFromSelected()
   } catch (e: unknown) {
     const err = toAppError(e)
@@ -1215,7 +1214,11 @@ usePollingScheduler(async () => {
     <PageHeader title="设备管理" subtitle="查看设备信息、编辑配置、执行 AT 指令">
       <template #actions>
         <div class="flex items-center gap-2">
-          <RefreshButton :loading="reloadingPage" label="全局刷新" @click="reloadPage" />
+          <RefreshButton :loading="loading" @click="fetchAll" />
+          <el-button @click="reloadPage" :loading="reloadingPage" class="ui-glass-border !border-0">
+            <el-icon><ArrowSync24Regular /></el-icon>
+            全局刷新
+          </el-button>
           <el-button @click="rescanDevices" :loading="rescanning" class="ui-glass-border !border-0">
             <el-icon><ArrowSync24Regular /></el-icon>
             重新扫描
