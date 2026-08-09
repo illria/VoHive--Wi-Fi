@@ -27,6 +27,16 @@ const (
 	SMSEncodingUnknown SMSEncoding = "unknown"
 )
 
+type SMSStorageStatus string
+
+const (
+	SMSStatusReceivedUnread SMSStorageStatus = "received_unread"
+	SMSStatusReceivedRead   SMSStorageStatus = "received_read"
+	SMSStatusStoredUnsent   SMSStorageStatus = "stored_unsent"
+	SMSStatusStoredSent     SMSStorageStatus = "stored_sent"
+	SMSStatusUnknown        SMSStorageStatus = "unknown"
+)
+
 type SMSDirection string
 
 const (
@@ -53,6 +63,7 @@ type SMSSubmitTPDU struct {
 
 type SMSMessage struct {
 	Direction              SMSDirection
+	StorageStatus          SMSStorageStatus
 	From                   string
 	To                     string
 	ServiceCenter          string
@@ -67,6 +78,7 @@ type SMSMessage struct {
 	DeliveryStatus         string
 	ServiceCenterTimestamp *time.Time
 	DischargeTimestamp     *time.Time
+	RawPDU                 string
 }
 
 var gsm7DefaultAlphabet = [128]rune{
@@ -677,6 +689,10 @@ func decodeSMSPDU(raw string) (SMSMessage, error) {
 		err = errors.New("unsupported SMS PDU message type")
 	}
 	return message, err
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func decodeDeliverPDU(
