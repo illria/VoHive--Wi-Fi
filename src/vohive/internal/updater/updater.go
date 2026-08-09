@@ -62,9 +62,23 @@ var errDownloadTooSlow = errors.New("下载速度低于最低阈值")
 type Channel string
 
 const (
-	ChannelStable      Channel = "stable"
-	ChannelPrerelease  Channel = "prerelease"
+	ChannelStable Channel = "stable"
+	ChannelBeta   Channel = "beta"
+	// ChannelPrerelease is kept as a source-compatible alias for callers that
+	// used the old API name. New API responses expose the user-facing "beta".
+	ChannelPrerelease Channel = ChannelBeta
 )
+
+func normalizeChannel(channel Channel) (Channel, error) {
+	switch strings.ToLower(strings.TrimSpace(string(channel))) {
+	case "", string(ChannelStable):
+		return ChannelStable, nil
+	case string(ChannelBeta), "prerelease":
+		return ChannelBeta, nil
+	default:
+		return "", newUpdateError(ErrInvalidUpdateChannel, "更新通道必须是 stable 或 beta", nil)
+	}
+}
 
 type UpdateState string
 
@@ -102,6 +116,7 @@ const (
 	ErrDockerUnsupported       ErrorCode = "docker_update_unsupported"
 	ErrRestartFailed           ErrorCode = "restart_failed"
 	ErrInvalidGitHubProxy      ErrorCode = "invalid_github_proxy"
+	ErrInvalidUpdateChannel    ErrorCode = "invalid_update_channel"
 	ErrUpdateInterrupted       ErrorCode = "update_interrupted"
 )
 
@@ -175,6 +190,7 @@ type UpdateStatus struct {
 	State          UpdateState `json:"state"`
 	CurrentVersion string      `json:"current_version"`
 	TargetVersion  string      `json:"target_version"`
+	Channel        string      `json:"channel,omitempty"`
 	ProxyID        string      `json:"proxy_id,omitempty"`
 	Progress       int         `json:"progress"`
 	Message        string      `json:"message"`
@@ -231,6 +247,11 @@ func NewManager(options Options) *Manager {
 		options.RepoName = DefaultRepoName
 	}
 	if options.Channel == "" {
+		options.Channel = ChannelStable
+	}
+	if normalized, err := normalizeChannel(options.Channel); err == nil {
+		options.Channel = normalized
+	} else {
 		options.Channel = ChannelStable
 	}
 	if options.APIBaseURL == "" {
@@ -296,6 +317,7 @@ func NewManager(options Options) *Manager {
 		state: UpdateStatus{
 			State:          StateIdle,
 			CurrentVersion: strings.TrimSpace(global.Version),
+			Channel:        string(options.Channel),
 			UpdatedAt:      options.Now(),
 		},
 	}
@@ -320,6 +342,10 @@ func CheckUpdateWithProxyURL(proxyID, customProxyURL string) (*UpdateInfo, error
 	return defaultManager.CheckUpdateWithProxyURL(proxyID, customProxyURL)
 }
 
+func CheckUpdateWithChannel(channel, proxyID, customProxyURL string) (*UpdateInfo, error) {
+	return defaultManager.CheckUpdateWithChannel(Channel(channel), proxyID, customProxyURL)
+}
+
 func ApplyUpdate() error {
 	_, err := defaultManager.StartUpdate()
 	return err
@@ -337,6 +363,10 @@ func StartUpdateWithProxyURL(proxyID, customProxyURL string) (UpdateStatus, erro
 
 func StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
 	return defaultManager.StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL, allowProxyFallback)
+}
+
+func StartUpdateWithChannel(channel, proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
+	return defaultManager.StartUpdateWithChannel(Channel(channel), proxyID, customProxyURL, allowProxyFallback)
 }
 
 func CurrentStatus() UpdateStatus { return defaultManager.Status() }
@@ -369,7 +399,15 @@ func (m *Manager) CheckUpdateWithProxy(proxyID string) (*UpdateInfo, error) {
 }
 
 func (m *Manager) CheckUpdateWithProxyURL(proxyID, customProxyURL string) (*UpdateInfo, error) {
-	release, proxy, err := m.fetchReleaseWithProxyURL(proxyID, customProxyURL)
+	return m.CheckUpdateWithChannel(m.channel, proxyID, customProxyURL)
+}
+
+func (m *Manager) CheckUpdateWithChannel(channel Channel, proxyID, customProxyURL string) (*UpdateInfo, error) {
+	channel, err := normalizeChannel(channel)
+	if err != nil {
+		return nil, err
+	}
+	release, proxy, err := m.fetchReleaseWithProxyURLForChannel(channel, proxyID, customProxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +439,7 @@ func (m *Manager) CheckUpdateWithProxyURL(proxyID, customProxyURL string) (*Upda
 		IsDocker:          m.isDocker(),
 		MigrationRequired: legacy,
 		Supported:         supported,
-		Channel:           string(m.channel),
+		Channel:           string(channel),
 		ProxyID:           proxy.ID,
 		ProxyOptions:      GitHubProxyOptions(),
 	}, nil
@@ -420,6 +458,14 @@ func (m *Manager) StartUpdateWithProxyURL(proxyID, customProxyURL string) (Updat
 }
 
 func (m *Manager) StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
+	return m.StartUpdateWithChannel(m.channel, proxyID, customProxyURL, allowProxyFallback)
+}
+
+func (m *Manager) StartUpdateWithChannel(channel Channel, proxyID, customProxyURL string, allowProxyFallback bool) (UpdateStatus, error) {
+	channel, err := normalizeChannel(channel)
+	if err != nil {
+		return m.Status(), err
+	}
 	m.mu.Lock()
 	// Recover a stale persisted state before checking the update lock. This is
 	// important when the previous process died during backup or replacement.
@@ -438,6 +484,7 @@ func (m *Manager) StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL str
 	m.state = UpdateStatus{
 		State:          StateChecking,
 		CurrentVersion: strings.TrimSpace(global.Version),
+		Channel:        string(channel),
 		ProxyID:        normalizeProxyID(proxyID),
 		Progress:       0,
 		Message:        "正在检查更新",
@@ -447,13 +494,13 @@ func (m *Manager) StartUpdateWithProxyURLAndFallback(proxyID, customProxyURL str
 	m.mu.Unlock()
 	m.persistStatus(status)
 
-	go m.runUpdate(proxyID, customProxyURL, allowProxyFallback)
+	go m.runUpdate(channel, proxyID, customProxyURL, allowProxyFallback)
 	return status, nil
 }
 
-func (m *Manager) runUpdate(proxyID, customProxyURL string, allowProxyFallback ...bool) {
+func (m *Manager) runUpdate(channel Channel, proxyID, customProxyURL string, allowProxyFallback ...bool) {
 	canFallback := len(allowProxyFallback) > 0 && allowProxyFallback[0]
-	release, proxy, err := m.fetchReleaseWithProxyURL(proxyID, customProxyURL)
+	release, proxy, err := m.fetchReleaseWithProxyURLForChannel(channel, proxyID, customProxyURL)
 	if err != nil {
 		m.fail(err)
 		return
@@ -564,13 +611,17 @@ func (m *Manager) fetchReleaseWithProxy(proxyID string) (Release, githubProxy, e
 }
 
 func (m *Manager) fetchReleaseWithProxyURL(proxyID, customProxyURL string) (Release, githubProxy, error) {
+	return m.fetchReleaseWithProxyURLForChannel(m.channel, proxyID, customProxyURL)
+}
+
+func (m *Manager) fetchReleaseWithProxyURLForChannel(channel Channel, proxyID, customProxyURL string) (Release, githubProxy, error) {
 	candidates, err := proxyCandidatesWithURL(proxyID, customProxyURL)
 	if err != nil {
 		return Release{}, githubProxy{}, err
 	}
 	var lastErr error
 	for _, proxy := range candidates {
-		release, err := m.fetchReleaseViaProxy(proxy)
+		release, err := m.fetchReleaseViaProxyForChannel(proxy, channel)
 		if err == nil {
 			return release, proxy, nil
 		}
@@ -584,7 +635,11 @@ func (m *Manager) fetchReleaseWithProxyURL(proxyID, customProxyURL string) (Rele
 }
 
 func (m *Manager) fetchReleaseViaProxy(proxy githubProxy) (Release, error) {
-	if m.channel == ChannelPrerelease {
+	return m.fetchReleaseViaProxyForChannel(proxy, m.channel)
+}
+
+func (m *Manager) fetchReleaseViaProxyForChannel(proxy githubProxy, channel Channel) (Release, error) {
+	if channel == ChannelBeta {
 		var releases []Release
 		if err := m.getJSONWithProxy(proxy, "/repos/"+m.repoOwner+"/"+m.repoName+"/releases?per_page=100", &releases, ErrGitHubUnreachable); err != nil {
 			return Release{}, err

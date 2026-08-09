@@ -270,7 +270,7 @@ watch(() => emailForm.value.smtp_port, (newPort) => {
 
 
 
-import { systemService, type UpdateInfo, type UpdateProxyOption, type UpdateStatus } from '../services/system'
+import { systemService, type UpdateChannel, type UpdateInfo, type UpdateProxyOption, type UpdateStatus } from '../services/system'
 
 const checkingUpdate = ref(false)
 const applyingUpdate = ref(false)
@@ -283,6 +283,32 @@ let updatePollStartedAt = 0
 let updatePollInFlight = false
 let updateReloadTimer: number | undefined
 let updateReloadPending = false
+
+function readStoredUpdateChannel(): UpdateChannel {
+  if (typeof window === 'undefined') return 'stable'
+  try {
+    const stored = window.localStorage.getItem('vohive.update_channel')
+    return stored === 'beta' ? 'beta' : 'stable'
+  } catch {
+    return 'stable'
+  }
+}
+
+const selectedUpdateChannel = ref<UpdateChannel>(readStoredUpdateChannel())
+
+function updateChannelLabel(channel?: string) {
+  return channel === 'beta' ? 'Beta 测试版' : '稳定版'
+}
+
+function persistUpdateChannel(channel: UpdateChannel) {
+  selectedUpdateChannel.value = channel === 'beta' ? 'beta' : 'stable'
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem('vohive.update_channel', selectedUpdateChannel.value)
+  } catch {
+    // localStorage 受限时仍可继续使用当前页面选择。
+  }
+}
 
 function readStoredUpdateProxy() {
   if (typeof window === 'undefined') return 'auto'
@@ -441,7 +467,7 @@ async function doCheckUpdate() {
   }
   checkingUpdate.value = true
   try {
-    const res = await systemService.checkUpdate(selectedUpdateProxy.value, proxyURL)
+    const res = await systemService.checkUpdate(selectedUpdateChannel.value, selectedUpdateProxy.value, proxyURL)
     if (!res.ok) throw new Error(res.error.message || '检查更新失败')
     updateInfo.value = res.data
     checkedCustomUpdateProxyURL.value = proxyURL
@@ -493,7 +519,7 @@ async function doApplyUpdate() {
       return
     }
     const allowProxyFallback = selectedUpdateProxy.value === 'auto'
-    const res = await systemService.applyUpdate(proxyForApply, proxyURLForApply, allowProxyFallback)
+    const res = await systemService.applyUpdate(selectedUpdateChannel.value, proxyForApply, proxyURLForApply, allowProxyFallback)
     if (!res.ok) throw new Error(res.error.message || '请求应用更新失败')
     updateStatus.value = res.data
     ElMessage.success('更新任务已开始，请等待服务重启')
@@ -615,6 +641,21 @@ onBeforeUnmount(() => {
                   </el-option>
                 </el-select>
               </div>
+              <div class="mt-3 flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50/70 p-3 dark:border-white/10 dark:bg-white/5 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <div class="text-xs font-semibold text-gray-600 dark:text-gray-300">更新通道</div>
+                  <div class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">稳定版适合日常使用；Beta 仅用于提前验证测试版本</div>
+                </div>
+                <el-select
+                  class="w-full sm:w-72"
+                  size="small"
+                  :model-value="selectedUpdateChannel"
+                  @update:model-value="persistUpdateChannel"
+                >
+                  <el-option label="稳定版（推荐）" value="stable" />
+                  <el-option label="Beta 测试版" value="beta" />
+                </el-select>
+              </div>
               <div v-if="selectedUpdateProxy === customUpdateProxyID" class="mt-3 rounded-lg border border-blue-100 bg-blue-50/70 p-3 dark:border-blue-400/20 dark:bg-blue-500/10">
                 <el-input
                   v-model="customUpdateProxyURL"
@@ -632,12 +673,13 @@ onBeforeUnmount(() => {
             
             <div v-if="updateInfo?.has_update" class="p-4 bg-amber-50 dark:bg-amber-500/10 rounded-lg border border-amber-200 dark:border-amber-500/20">
                <div class="flex items-center gap-2 text-amber-800 dark:text-amber-200 mb-2 font-bold text-[13px]">
-                 <el-icon><Alert24Regular /></el-icon>发现新版本: {{ updateInfo.latest_version }}
+                 <el-icon><Alert24Regular /></el-icon>发现{{ updateChannelLabel(updateInfo.channel) }}更新: {{ updateInfo.latest_version }}
                </div>
                <div class="text-xs text-amber-700 dark:text-amber-300/80 mb-4 whitespace-pre-wrap max-h-32 overflow-y-auto pr-2 custom-scrollbar">
                  {{ updateInfo.release_note || '暂无更新说明' }}
                </div>
                <div class="text-xs text-amber-700 dark:text-amber-300 mb-3">
+                 更新通道：{{ updateChannelLabel(updateInfo.channel) }}；
                  本次检查入口：{{ updateProxyLabel(updateInfo.proxy_id) }}
                </div>
                <div v-if="updateInfo.migration_required" class="text-xs text-amber-700 dark:text-amber-300 mb-3">
@@ -656,6 +698,7 @@ onBeforeUnmount(() => {
                 <span class="font-mono text-xs text-gray-500">{{ updateStatus.progress }}%</span>
               </div>
               <div v-if="updateStatus.proxy_id" class="mt-2 text-xs text-gray-500">
+                更新通道：{{ updateChannelLabel(updateStatus.channel) }}；
                 更新入口：{{ updateProxyLabel(updateStatus.proxy_id) }}
               </div>
               <el-progress class="mt-3" :percentage="Math.max(0, Math.min(100, updateStatus.progress))" :status="updateStatus.state === 'success' ? 'success' : updateStatus.state === 'failed' || updateStatus.state === 'rolled_back' ? 'exception' : undefined" />

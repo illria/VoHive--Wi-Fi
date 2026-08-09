@@ -73,6 +73,11 @@ jobs:
           set -euo pipefail
           CGO_ENABLED=0 GOOS=linux go test ./internal/device
 
+      - name: Run VoWiFi runtime and IMS tests
+        if: matrix.artifact_arch == 'amd64'
+        working-directory: src/vowifi-go
+        run: CGO_ENABLED=0 GOOS=linux go test ./...
+
       - name: Build test binaries
         working-directory: src/vohive
         env:

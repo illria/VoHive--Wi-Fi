@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/illria/VoHive--Wi-Fi/main/install.s
 
 `.github/workflows/ci.yml` 在 Pull Request、`main` 推送和手动运行时执行前端 lint/typecheck/build、Go 测试，并为 amd64、arm64、armv7 生成可下载的测试二进制 artifact。
 
-`.github/workflows/release.yml` 只接受 `vX.Y.Z` 或带预发布标识的 SemVer 标签，例如 `v1.2.3`、`v1.2.3-rc.1`。每个正式 Release 包含：
+`.github/workflows/release.yml` 只接受 `vX.Y.Z` 或带预发布标识的 SemVer 标签，例如 `v1.2.3`、`v1.2.3-beta.1`。发布时选择 `stable` 或 `beta` 通道；稳定版必须是最终版本号，Beta 必须带预发布后缀。每个 Release 包含：
 
 - `vohive_vX.Y.Z_linux_amd64`
 - `vohive_vX.Y.Z_linux_arm64`
@@ -43,7 +43,7 @@ SIM PIN Web 状态、PIN1/UPIN 映射、单次验证边界和手工验证清单�
 
 ## 在线更新
 
-登录后可在“系统设置”中检查稳定 Release、阅读 Release Note，并确认更新。更新入口默认使用“自动（推荐）”：服务端会在检查阶段依次尝试多个 GitHub 加速入口，选定成功入口后，本次下载和校验任务会保持不变；也可以手动选择固定入口，或填写自己的自定义 HTTP(S) 加速地址。自定义地址应填写可拼接 GitHub URL 的前缀，例如 `https://proxy.example.com/`。服务端会按当前架构选择精确资产，下载后验证 SHA-256，再备份并原子替换运行文件；前端通过状态接口轮询下载、校验、替换、重启和回滚状态。
+登录后可在“系统设置”中选择稳定版或 Beta 通道，检查 Release Note 并确认更新。默认是稳定版，避免日常运行实例误切到测试版本。更新入口默认使用“自动（推荐）”：服务端会在检查阶段依次尝试多个 GitHub 加速入口，选定成功入口后，本次下载和校验任务会保持不变；也可以手动选择固定入口，或填写自己的自定义 HTTP(S) 加速地址。自定义地址应填写可拼接 GitHub URL 的前缀，例如 `https://proxy.example.com/`。服务端会按当前架构选择精确资产，下载后验证 SHA-256，再备份并原子替换运行文件；前端通过状态接口轮询下载、校验、替换、重启和回滚状态。
 
 在线更新不会删除 `/opt/vohive/config/config.yaml`、`/opt/vohive/data`、用户账号、通知配置、APN、短信数据或设备配置。Docker 环境不执行运行中二进制替换，应由容器部署流程更新镜像。
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	swusim "github.com/iniwex5/vowifi-go/engine/sim"
+	vowifimodel "github.com/iniwex5/vowifi-go/internal/vowifi"
 	"github.com/iniwex5/vowifi-go/internal/vowifi/runtimecore"
 	"github.com/iniwex5/vowifi-go/runtimehost/eventhost"
 	"github.com/iniwex5/vowifi-go/runtimehost/identity"
@@ -206,6 +207,7 @@ type Instance struct {
 	state     State
 	obs       map[string]interface{}
 	service   IMSService
+	ims       vowifimodel.IMSSession
 	delivery  messaging.DeliveryStore
 	observers []Observer
 	stopped   bool
@@ -366,6 +368,56 @@ func Start(ctx context.Context, req StartRequest) (*Instance, error) {
 		LastReason:    "epdg_tunnel_ready",
 		UpdatedAt:     time.Now(),
 	})
+
+	service, imsSession, imsEvidence, smsReady, imsErr := startIMSRuntime(
+		runCtx,
+		inst,
+		deviceID,
+		profileOrPrepared(req.Profile, *prepared),
+		*prepared,
+		tunnel,
+		req.SIM,
+		req.DeliveryStore,
+	)
+	if imsErr != nil {
+		inst.fail(runCtx, "ims", "ims_registration_failed", imsErr)
+		tunnel.Shutdown()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = tunnel.WaitDoneContext(stopCtx)
+		stopCancel()
+		cancel()
+		return inst, imsErr
+	}
+	phase := PhaseIMSReady
+	lastReason := "ims_registered"
+	if smsReady {
+		phase = PhaseSMSReady
+		lastReason = "ims_registered_sms_ready"
+	}
+	inst.mu.Lock()
+	inst.service = service
+	inst.ims = imsSession
+	if inst.obs == nil {
+		inst.obs = make(map[string]interface{})
+	}
+	inst.obs["ims"] = imsObs(imsEvidence, smsReady)
+	inst.mu.Unlock()
+	inst.setState(runCtx, State{
+		DeviceID:      deviceID,
+		Phase:         phase,
+		DataplaneMode: strings.TrimSpace(req.Dataplane.Mode),
+		SIMReady:      true,
+		AccessReady:   true,
+		TunnelReady:   snap.Established,
+		IMSReady:      imsEvidence.Registered,
+		SMSReady:      smsReady,
+		RegStatus:     regStatus,
+		RegStatusText: imsEvidence.RegistrationState,
+		NetworkMode:   strings.TrimSpace(req.NetworkMode),
+		LastReason:    lastReason,
+		UpdatedAt:     time.Now(),
+	})
+	monitorIMSRuntime(runCtx, inst, imsSession)
 	return inst, nil
 }
 
@@ -382,6 +434,7 @@ func (i *Instance) Stop(ctx context.Context) error {
 	cancel := i.cancel
 	st := i.state
 	tunnel := i.tunnel
+	imsSession := i.ims
 	st.Phase = PhaseStopped
 	st.LastReason = "stopped"
 	st.UpdatedAt = time.Now()
@@ -391,6 +444,9 @@ func (i *Instance) Stop(ctx context.Context) error {
 
 	if cancel != nil {
 		cancel()
+	}
+	if imsSession != nil {
+		_ = imsSession.Close(ctx)
 	}
 	if tunnel != nil {
 		tunnel.Shutdown()

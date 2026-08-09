@@ -1,0 +1,372 @@
+package ims
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/iniwex5/vowifi-go/internal/vowifi"
+)
+
+type smsTestAKA struct{ *recordingAKA }
+
+func (smsTestAKA) ReadSMSCenter(context.Context, string) (string, error) {
+	return "+447785016005", nil
+}
+
+func TestSessionReceivesAndAcknowledgesSMSOverIMS(t *testing.T) {
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_ = listener.SetDeadline(time.Now().Add(10 * time.Second))
+
+	received := make(chan ReceivedSMS, 1)
+	serverDone := make(chan error, 1)
+	nonce := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	go func() { serverDone <- serveInboundSMS(listener, nonce) }()
+	provider, err := NewProvider(
+		smsTestAKA{&recordingAKA{result: vowifi.AKAResult{RES: []byte{1, 2, 3, 4}}}},
+		Config{
+			PCSCF: listener.LocalAddr().String(), LocalAddress: "127.0.0.1",
+			Transport: "udp", TransactionTimeout: 3 * time.Second, SecurityMode: SecurityDisabled,
+			OnSMS: func(_ context.Context, message ReceivedSMS) error {
+				received <- message
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := provider.Start(context.Background(), vowifi.IMSRequest{
+		DeviceID: "ec20",
+		Identity: vowifi.SIMIdentity{IMSI: "001010123456789", HomeMCC: "001", HomeMNC: "01"},
+		Tunnel: evidenceTunnel{evidence: vowifi.TunnelEvidence{
+			Established: true, LocalIPv4: "127.0.0.1", PCSCF: []string{listener.LocalAddr().String()},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case message := <-received:
+		if message.From != "+12345" || message.Text != "HELLO" ||
+			message.MessageID != "ims:network-deliver-1:42" ||
+			message.ServiceCenterTimestamp == nil || message.Timestamp.IsZero() {
+			t.Fatalf("received = %#v", message)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for inbound SMS")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeSecurityHeaders(t *testing.T) {
+	verify := "ipsec-3gpp;alg=hmac-sha-1-96;prot=esp;mod=trans"
+	headers := runtimeSecurityHeaders(true, verify)
+	want := []string{
+		"Security-Verify: " + verify,
+		"Require: sec-agree",
+		"Proxy-Require: sec-agree",
+	}
+	if len(headers) != len(want) {
+		t.Fatalf("security header count = %d, want %d", len(headers), len(want))
+	}
+	for index := range want {
+		if headers[index] != want[index] {
+			t.Fatalf("security header %d = %q, want %q", index, headers[index], want[index])
+		}
+	}
+	if headers := runtimeSecurityHeaders(false, verify); len(headers) != 0 {
+		t.Fatalf("disabled security headers = %#v", headers)
+	}
+}
+
+func TestSessionSendsSMSOverIMS(t *testing.T) {
+	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_ = listener.SetDeadline(time.Now().Add(10 * time.Second))
+	serverDone := make(chan error, 1)
+	statusReceived := make(chan ReceivedSMSStatus, 1)
+	nonce := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	go func() { serverDone <- serveOutboundSMS(listener, nonce) }()
+	provider, err := NewProvider(
+		smsTestAKA{&recordingAKA{result: vowifi.AKAResult{RES: []byte{1, 2, 3, 4}}}},
+		Config{
+			PCSCF: listener.LocalAddr().String(), LocalAddress: "127.0.0.1",
+			Transport: "udp", TransactionTimeout: 3 * time.Second, SecurityMode: SecurityDisabled,
+			OnSMSStatus: func(_ context.Context, status ReceivedSMSStatus) error {
+				statusReceived <- status
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := provider.Start(context.Background(), vowifi.IMSRequest{
+		DeviceID: "ec20",
+		Identity: vowifi.SIMIdentity{IMSI: "001010123456789", HomeMCC: "001", HomeMNC: "01"},
+		Tunnel: evidenceTunnel{evidence: vowifi.TunnelEvidence{
+			Established: true, LocalIPv4: "127.0.0.1", PCSCF: []string{listener.LocalAddr().String()},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.(vowifi.SMSSender).SendSMS(context.Background(), vowifi.SMSSubmitRequest{
+		Recipient: "+12345", Text: "HELLO",
+	})
+	if err != nil || !result.AllPartsAccepted || result.PartsAccepted != 1 || result.PartResults[0].SIPCode != 202 {
+		t.Fatalf("SendSMS = (%#v, %v)", result, err)
+	}
+	select {
+	case status := <-statusReceived:
+		if status.To != "+12345" || status.MessageReference != result.PartResults[0].Reference ||
+			status.StatusCode != 0 || status.DeliveryStatus != "delivered" ||
+			status.ServiceCenterTimestamp == nil || status.DischargeTimestamp == nil {
+			t.Fatalf("SMS status = %#v", status)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SMS delivery status")
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func serveInboundSMS(listener *net.UDPConn, nonce string) error {
+	packet := make([]byte, 65535)
+	count, remote, err := listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	_, headers, err := parseTestRequest(packet[:count])
+	if err != nil {
+		return err
+	}
+	callID := headers["call-id"]
+	if _, err = listener.WriteToUDP(testResponse(401, "Unauthorized", callID, headers["cseq"], []string{
+		`WWW-Authenticate: Digest realm="ims.mnc001.mcc001.3gppnetwork.org", nonce="` + nonce + `", algorithm=AKAv1-MD5, qop="auth"`,
+	}), remote); err != nil {
+		return err
+	}
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	_, headers, err = parseTestRequest(packet[:count])
+	if err != nil {
+		return err
+	}
+	if _, err = listener.WriteToUDP(testResponse(200, "OK", callID, headers["cseq"], []string{
+		"Contact: " + headers["contact"] + ";expires=600",
+	}), remote); err != nil {
+		return err
+	}
+
+	tpdu := []byte{
+		0x04, 0x05, 0x91, 0x21, 0x43, 0xf5, 0x00, 0x00,
+		0x42, 0x10, 0x20, 0x30, 0x40, 0x50, 0x00, 0x05,
+		0xc8, 0x22, 0x93, 0xf9, 0x04,
+	}
+	rpdu := []byte{0x01, 0x2a, 0x00, 0x00, byte(len(tpdu))}
+	rpdu = append(rpdu, tpdu...)
+	request := []byte(strings.Join([]string{
+		"MESSAGE sip:001010123456789@ims.mnc001.mcc001.3gppnetwork.org SIP/2.0",
+		"Via: SIP/2.0/UDP " + listener.LocalAddr().String() + ";branch=z9hG4bKdeliver",
+		"From: <sip:ipsmgw@example.test>;tag=gw",
+		"To: <sip:001010123456789@ims.mnc001.mcc001.3gppnetwork.org>",
+		"P-Asserted-Identity: <sip:ipsmgw@example.test>",
+		"Call-ID: network-deliver-1",
+		"CSeq: 1 MESSAGE",
+		"Content-Type: application/vnd.3gpp.sms",
+		fmt.Sprintf("Content-Length: %d", len(rpdu)), "", "",
+	}, "\r\n"))
+	request = append(request, rpdu...)
+	if _, err = listener.WriteToUDP(request, remote); err != nil {
+		return err
+	}
+
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	response, err := parseSIPResponse(packet[:count])
+	if err != nil || response.StatusCode != 200 {
+		return fmt.Errorf("delivery SIP response = (%#v, %v)", response, err)
+	}
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	report, err := parseSIPPacket(packet[:count])
+	if err != nil || report.Request == nil {
+		return fmt.Errorf("delivery report parse: %v", err)
+	}
+	if report.Request.Method != "MESSAGE" || report.Request.value("In-Reply-To") != "network-deliver-1" ||
+		len(report.Request.Body) != 2 || report.Request.Body[0] != 0x02 || report.Request.Body[1] != 0x2a {
+		return fmt.Errorf("unexpected delivery report %#v", report.Request)
+	}
+	if _, err = listener.WriteToUDP(testResponse(200, "OK", report.Request.value("Call-ID"), report.Request.value("CSeq"), nil), remote); err != nil {
+		return err
+	}
+
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	_, headers, err = parseTestRequest(packet[:count])
+	if err != nil {
+		return err
+	}
+	if headers["expires"] != "0" {
+		return errors.New("expected deregistration")
+	}
+	_, err = listener.WriteToUDP(testResponse(200, "OK", callID, headers["cseq"], nil), remote)
+	return err
+}
+
+func serveOutboundSMS(listener *net.UDPConn, nonce string) error {
+	packet := make([]byte, 65535)
+	count, remote, err := listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	_, headers, err := parseTestRequest(packet[:count])
+	if err != nil {
+		return err
+	}
+	registerCallID := headers["call-id"]
+	if _, err = listener.WriteToUDP(testResponse(401, "Unauthorized", registerCallID, headers["cseq"], []string{
+		`WWW-Authenticate: Digest realm="ims.mnc001.mcc001.3gppnetwork.org", nonce="` + nonce + `", algorithm=AKAv1-MD5, qop="auth"`,
+	}), remote); err != nil {
+		return err
+	}
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	_, headers, err = parseTestRequest(packet[:count])
+	if err != nil {
+		return err
+	}
+	if _, err = listener.WriteToUDP(testResponse(200, "OK", registerCallID, headers["cseq"], []string{
+		"Contact: " + headers["contact"] + ";expires=600",
+	}), remote); err != nil {
+		return err
+	}
+
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	message, err := parseSIPPacket(packet[:count])
+	if err != nil || message.Request == nil {
+		return fmt.Errorf("outbound MESSAGE parse: %v", err)
+	}
+	if message.Request.Method != "MESSAGE" || message.Request.URI != "tel:+447785016005" ||
+		strings.ToLower(message.Request.value("Content-Type")) != smsContentType {
+		return fmt.Errorf("unexpected outbound MESSAGE %#v", message.Request)
+	}
+	rpdu, err := parseRPDU(message.Request.Body)
+	if err != nil || rpdu.messageType != 0 || len(rpdu.tpdu) != 0 {
+		// parseRPDU intentionally decodes only network-to-MS RP-DATA; inspect
+		// the mandatory MO prefix and TPDU length directly below.
+		if err != nil {
+			return err
+		}
+	}
+	body := message.Request.Body
+	if len(body) < 8 || body[0] != 0x00 || body[2] != 0x00 {
+		return fmt.Errorf("invalid MO RP-DATA %x", body)
+	}
+	destinationLength := int(body[3])
+	userLengthIndex := 4 + destinationLength
+	if userLengthIndex >= len(body) || int(body[userLengthIndex]) != len(body)-userLengthIndex-1 {
+		return fmt.Errorf("invalid MO RP-DATA lengths %x", body)
+	}
+	tpdu := body[userLengthIndex+1:]
+	if len(tpdu) < 2 || tpdu[0]&0x03 != 1 || tpdu[0]&0x20 == 0 || tpdu[1] != body[1] {
+		return fmt.Errorf("SMS-SUBMIT did not request a trackable status report: %x", tpdu)
+	}
+	if _, err = listener.WriteToUDP(testResponse(202, "Accepted", message.Request.value("Call-ID"), message.Request.value("CSeq"), nil), remote); err != nil {
+		return err
+	}
+
+	statusTPDU := []byte{
+		0x02, tpdu[1], 0x05, 0x91, 0x21, 0x43, 0xf5,
+		0x42, 0x10, 0x20, 0x30, 0x40, 0x50, 0x00,
+		0x42, 0x10, 0x20, 0x30, 0x50, 0x50, 0x00,
+		0x00,
+	}
+	statusRPDU := []byte{0x01, 0x2b, 0x00, 0x00, byte(len(statusTPDU))}
+	statusRPDU = append(statusRPDU, statusTPDU...)
+	statusRequest := []byte(strings.Join([]string{
+		"MESSAGE sip:001010123456789@ims.mnc001.mcc001.3gppnetwork.org SIP/2.0",
+		"Via: SIP/2.0/UDP " + listener.LocalAddr().String() + ";branch=z9hG4bKstatus",
+		"From: <sip:ipsmgw@example.test>;tag=gw",
+		"To: <sip:001010123456789@ims.mnc001.mcc001.3gppnetwork.org>",
+		"P-Asserted-Identity: <sip:ipsmgw@example.test>",
+		"Call-ID: network-status-1",
+		"CSeq: 2 MESSAGE",
+		"Content-Type: application/vnd.3gpp.sms",
+		fmt.Sprintf("Content-Length: %d", len(statusRPDU)), "", "",
+	}, "\r\n"))
+	statusRequest = append(statusRequest, statusRPDU...)
+	if _, err = listener.WriteToUDP(statusRequest, remote); err != nil {
+		return err
+	}
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	statusResponse, err := parseSIPResponse(packet[:count])
+	if err != nil || statusResponse.StatusCode != 200 {
+		return fmt.Errorf("status SIP response = (%#v, %v)", statusResponse, err)
+	}
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	statusACK, err := parseSIPPacket(packet[:count])
+	if err != nil || statusACK.Request == nil || statusACK.Request.value("In-Reply-To") != "network-status-1" ||
+		len(statusACK.Request.Body) != 2 || statusACK.Request.Body[0] != 0x02 || statusACK.Request.Body[1] != 0x2b {
+		return fmt.Errorf("unexpected status RP-ACK %#v (%v)", statusACK.Request, err)
+	}
+	if _, err = listener.WriteToUDP(testResponse(200, "OK", statusACK.Request.value("Call-ID"), statusACK.Request.value("CSeq"), nil), remote); err != nil {
+		return err
+	}
+
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	_, headers, err = parseTestRequest(packet[:count])
+	if err != nil {
+		return err
+	}
+	if headers["expires"] != "0" {
+		return errors.New("expected deregistration")
+	}
+	_, err = listener.WriteToUDP(testResponse(200, "OK", registerCallID, headers["cseq"], nil), remote)
+	return err
+}
