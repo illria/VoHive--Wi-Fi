@@ -38,6 +38,12 @@ func (t imsTunnelEvidence) Evidence() vowifimodel.TunnelEvidence {
 	}
 }
 
+func (imsTunnelEvidence) Close(context.Context) error {
+	// The runtime owns the established ePDG session. IMS receives a read-only
+	// evidence view and must never tear down the underlying tunnel.
+	return nil
+}
+
 type runtimeAKAProvider struct {
 	sim SIMAdapter
 }
