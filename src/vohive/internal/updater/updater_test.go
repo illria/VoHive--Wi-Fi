@@ -156,6 +156,30 @@ func TestSelectPrereleaseRelease(t *testing.T) {
 	}
 }
 
+func TestNormalizeChannelUsesStableAndBetaNames(t *testing.T) {
+	tests := []struct {
+		name string
+		in   Channel
+		want Channel
+	}{
+		{name: "empty defaults to stable", in: "", want: ChannelStable},
+		{name: "stable", in: ChannelStable, want: ChannelStable},
+		{name: "beta", in: ChannelBeta, want: ChannelBeta},
+		{name: "legacy prerelease spelling", in: "prerelease", want: ChannelBeta},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeChannel(test.in)
+			if err != nil || got != test.want {
+				t.Fatalf("normalizeChannel(%q) = %q, %v; want %q", test.in, got, err, test.want)
+			}
+		})
+	}
+	if _, err := normalizeChannel("nightly"); ErrorCodeOf(err) != string(ErrInvalidUpdateChannel) {
+		t.Fatalf("normalizeChannel(\"nightly\") error code = %q, want %q", ErrorCodeOf(err), ErrInvalidUpdateChannel)
+	}
+}
+
 func TestFindAssets(t *testing.T) {
 	binary, checksum, err := findAssets([]Asset{
 		{Name: "vohive_v1.2.3_linux_arm64", BrowserDownloadURL: "binary"},
@@ -232,11 +256,11 @@ func TestCheckUpdateReportsNoUpdate(t *testing.T) {
 	}
 }
 
-func TestPrereleaseChannel(t *testing.T) {
+func TestBetaChannel(t *testing.T) {
 	setTestVersion(t, "v1.0.0")
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/repos/illria/VoHive--Wi-Fi/releases" {
-			t.Errorf("unexpected prerelease path: %s", request.URL.Path)
+		if request.URL.Path != "/repos/illria/VoHive--Wi-Fi/releases" || request.URL.Query().Get("per_page") != "100" {
+			t.Errorf("unexpected beta release path: %s?%s", request.URL.Path, request.URL.RawQuery)
 		}
 		writeJSON(t, writer, []Release{
 			{TagName: "v1.1.0-beta.1", Prerelease: true},
@@ -246,14 +270,14 @@ func TestPrereleaseChannel(t *testing.T) {
 	defer server.Close()
 	manager := NewManager(Options{
 		APIBaseURL:  server.URL,
-		Channel:     ChannelPrerelease,
+		Channel:     ChannelBeta,
 		HTTPClient:  server.Client(),
 		IsDocker:    func() bool { return false },
 		Executable:  func() (string, error) { return filepath.Join(t.TempDir(), "vohive"), nil },
 	})
 	info, err := manager.CheckUpdate()
-	if err != nil || info.LatestVer != "v1.1.0-beta.1" || info.Channel != string(ChannelPrerelease) {
-		t.Fatalf("unexpected prerelease info: %+v, error=%v", info, err)
+	if err != nil || info.LatestVer != "v1.1.0-beta.1" || info.Channel != string(ChannelBeta) {
+		t.Fatalf("unexpected beta info: %+v, error=%v", info, err)
 	}
 }
 
@@ -761,7 +785,7 @@ func TestRunUpdatePinsProxySelectedDuringAutoCheck(t *testing.T) {
 		SignalDelay:   time.Millisecond,
 	})
 
-	manager.runUpdate(ProxyAuto, "")
+	manager.runUpdate(ChannelStable, ProxyAuto, "")
 	if status := manager.Status(); status.State != StateRestarting {
 		t.Fatalf("update did not reach restarting state: %+v", status)
 	}

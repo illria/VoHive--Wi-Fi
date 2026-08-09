@@ -10,6 +10,14 @@ on:
         description: 'Existing or new SemVer release tag, for example v1.2.3'
         required: true
         type: string
+      channel:
+        description: 'Release channel: stable or beta'
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
       ref:
         description: 'Git ref to build when dispatching manually'
         required: true
@@ -30,6 +38,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      channel: ${{ steps.version.outputs.channel }}
       build_time: ${{ steps.version.outputs.build_time }}
     steps:
       - name: Checkout release source
@@ -42,6 +51,7 @@ jobs:
         shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
           if [ -n "$INPUT_VERSION" ]; then
@@ -53,9 +63,36 @@ jobs:
             echo "Invalid SemVer tag: $VERSION" >&2
             exit 1
           fi
+          CHANNEL="$INPUT_CHANNEL"
+          if [ -z "$CHANNEL" ]; then
+            if [[ "$VERSION" == *-* ]]; then
+              CHANNEL=beta
+            else
+              CHANNEL=stable
+            fi
+          fi
+          case "$CHANNEL" in
+            stable)
+              if [[ "$VERSION" == *-* ]]; then
+                echo "Stable releases must use a final SemVer without a prerelease suffix: $VERSION" >&2
+                exit 1
+              fi
+              ;;
+            beta)
+              if [[ "$VERSION" != *-* ]]; then
+                echo "Beta releases must use a prerelease SemVer such as v1.2.3-beta.1: $VERSION" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Invalid release channel: $CHANNEL" >&2
+              exit 1
+              ;;
+          esac
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
-          if [[ "$VERSION" == *-* ]]; then
+          if [ "$CHANNEL" = beta ]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -141,12 +178,18 @@ jobs:
         working-directory: src/vohive
         run: CGO_ENABLED=0 GOOS=linux go test -tags "with_utls nomsgpack" ./...
 
+      - name: Run VoWiFi runtime and IMS tests
+        if: matrix.artifact_arch == 'amd64'
+        working-directory: src/vowifi-go
+        run: CGO_ENABLED=0 GOOS=linux go test ./...
+
       - name: Build and package release assets
         working-directory: src/vohive
         env:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
           COMMIT: ${{ github.sha }}
           BUILD_TIME: ${{ needs.prepare.outputs.build_time }}
         run: |
@@ -241,6 +284,7 @@ jobs:
               )
           manifest = {
               "version": version,
+              "channel": "${{ needs.prepare.outputs.channel }}",
               "build_time": build_time,
               "commit": commit,
               "minimum_version": version,
@@ -261,6 +305,6 @@ jobs:
           name: VoHive ${{ needs.prepare.outputs.version }}
           generate_release_notes: true
           prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
-          make_latest: ${{ needs.prepare.outputs.prerelease != 'true' }}
+          make_latest: ${{ needs.prepare.outputs.channel == 'stable' }}
           fail_on_unmatched_files: true
           files: release/*

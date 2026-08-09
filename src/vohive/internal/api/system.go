@@ -17,7 +17,7 @@ func writeUpdateError(c *gin.Context, err error) {
 	switch code {
 	case string(updater.ErrUpdateInProgress), string(updater.ErrDockerUnsupported), string(updater.ErrNoUpdate):
 		status = http.StatusConflict
-	case string(updater.ErrInvalidCurrentVersion), string(updater.ErrUnsupportedArchitecture), string(updater.ErrInvalidGitHubProxy):
+	case string(updater.ErrInvalidCurrentVersion), string(updater.ErrUnsupportedArchitecture), string(updater.ErrInvalidGitHubProxy), string(updater.ErrInvalidUpdateChannel):
 		status = http.StatusBadRequest
 	case string(updater.ErrGitHubUnreachable), string(updater.ErrReleaseNotFound):
 		status = http.StatusBadGateway
@@ -31,7 +31,7 @@ func writeUpdateError(c *gin.Context, err error) {
 
 // handleCheckUpdate 检查系统更新
 func (s *Server) handleCheckUpdate(c *gin.Context) {
-	info, err := updater.CheckUpdateWithProxyURL(c.Query("proxy_id"), c.Query("proxy_url"))
+	info, err := updater.CheckUpdateWithChannel(c.Query("channel"), c.Query("proxy_id"), c.Query("proxy_url"))
 	if err != nil {
 		logger.Error("检查系统更新失败", "err", err)
 		writeUpdateError(c, err)
@@ -49,6 +49,7 @@ func (s *Server) handleUpdateProxies(c *gin.Context) {
 // handleApplyUpdate 应用系统更新
 func (s *Server) handleApplyUpdate(c *gin.Context) {
 	var request struct {
+		Channel             string `json:"channel"`
 		ProxyID             string `json:"proxy_id"`
 		ProxyURL            string `json:"proxy_url"`
 		AllowProxyFallback  bool   `json:"allow_proxy_fallback"`
@@ -61,7 +62,7 @@ func (s *Server) handleApplyUpdate(c *gin.Context) {
 		})
 		return
 	}
-	status, err := updater.StartUpdateWithProxyURLAndFallback(request.ProxyID, request.ProxyURL, request.AllowProxyFallback)
+	status, err := updater.StartUpdateWithChannel(request.Channel, request.ProxyID, request.ProxyURL, request.AllowProxyFallback)
 	if err != nil {
 		logger.Error("应用更新失败", "err", err)
 		writeUpdateError(c, err)

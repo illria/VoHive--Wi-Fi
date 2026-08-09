@@ -115,6 +115,11 @@ jobs:
         working-directory: src/vohive
         run: CGO_ENABLED=0 GOOS=linux go test -tags "with_utls nomsgpack" ./...
 
+      - name: Run VoWiFi runtime and IMS tests
+        if: matrix.artifact_arch == 'amd64'
+        working-directory: src/vowifi-go
+        run: CGO_ENABLED=0 GOOS=linux go test ./...
+
       - name: Build test binary
         working-directory: src/vohive
         env:

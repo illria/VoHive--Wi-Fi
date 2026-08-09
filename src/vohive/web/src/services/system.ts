@@ -15,10 +15,12 @@ export type UpdateInfo = {
   is_docker: boolean
   migration_required: boolean
   supported: boolean
-  channel: string
+  channel: UpdateChannel
   proxy_id: string
   proxy_options: UpdateProxyOption[]
 }
+
+export type UpdateChannel = 'stable' | 'beta'
 
 export type UpdateProxyOption = {
   id: string
@@ -43,6 +45,7 @@ export type UpdateStatus = {
   state: UpdateState
   current_version: string
   target_version: string
+  channel?: UpdateChannel
   proxy_id?: string
   progress: number
   message: string
@@ -315,17 +318,18 @@ export const systemService = {
       return res.data
     })
   },
-  checkUpdate(proxyID = 'auto', proxyURL = '') {
+  checkUpdate(channel: UpdateChannel = 'stable', proxyID = 'auto', proxyURL = '') {
     return callService(async () => {
       const res = await api.get<UpdateInfo>('/system/update/check', {
-        params: { proxy_id: proxyID, ...(proxyURL ? { proxy_url: proxyURL } : {}) }
+        params: { channel, proxy_id: proxyID, ...(proxyURL ? { proxy_url: proxyURL } : {}) }
       })
       return res.data
     })
   },
-  applyUpdate(proxyID = 'auto', proxyURL = '', allowProxyFallback = false) {
+  applyUpdate(channel: UpdateChannel = 'stable', proxyID = 'auto', proxyURL = '', allowProxyFallback = false) {
     return callService(async () => {
       const res = await api.post<UpdateStatus>('/system/update/apply', {
+        channel,
         proxy_id: proxyID,
         ...(proxyURL ? { proxy_url: proxyURL } : {}),
         allow_proxy_fallback: allowProxyFallback
