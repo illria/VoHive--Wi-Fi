@@ -159,8 +159,16 @@ export const devicesService = {
         // contains real hardware. This diagnostic row is intentionally disabled.
         devices.push({
           discovery_key: 'pcsc:unavailable',
+          control_path: '',
+          net_interface: '',
+          usb_path: '',
+          vendor_id: 0,
+          product_id: 0,
           mode: 'pcsc',
           driver_name: 'PC/SC',
+          at_ports: [],
+          at_port: '',
+          configured: false,
           reader_only: true,
           degraded: true,
           discovery_error: pcscError
