@@ -150,7 +150,23 @@ export const devicesService = {
   listDiscovered() {
     return callService(async () => {
       const res = await api.get('/devices/discovered', { params: { with_imei: 1 } })
-      return (res.data?.devices || []) as DiscoveredDevice[]
+      const devices = Array.isArray(res.data?.devices)
+        ? ([...res.data.devices] as DiscoveredDevice[])
+        : []
+      const pcscError = typeof res.data?.pcsc_error === 'string' ? res.data.pcsc_error.trim() : ''
+      if (pcscError && !devices.some((item) => item.mode === 'pcsc')) {
+        // The UI still exposes the setup error, but the API's device list only
+        // contains real hardware. This diagnostic row is intentionally disabled.
+        devices.push({
+          discovery_key: 'pcsc:unavailable',
+          mode: 'pcsc',
+          driver_name: 'PC/SC',
+          reader_only: true,
+          degraded: true,
+          discovery_error: pcscError
+        })
+      }
+      return devices
     })
   },
   refreshInfo(id: string) {

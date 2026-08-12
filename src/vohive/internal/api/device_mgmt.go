@@ -1182,18 +1182,15 @@ func (s *Server) handleDeviceMgmtDiscovered(c *gin.Context) {
 				DiscoveryError:     strings.TrimSpace(reader.Error),
 			})
 		}
-	} else {
-		out = append(out, discoveredDevice{
-			DiscoveryKey:   "pcsc:unavailable",
-			Mode:           backend.BackendPCSC,
-			DriverName:     "PC/SC",
-			ReaderOnly:     true,
-			Degraded:       true,
-			DiscoveryError: "PC/SC 服务不可用: " + pcscErr.Error(),
-		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"devices": out})
+	response := gin.H{"devices": out}
+	if pcscErr != nil {
+		// Keep diagnostics separate from the device list. A missing pcscd service
+		// is useful setup information, but it is not a selectable device.
+		response["pcsc_error"] = "PC/SC 服务不可用: " + pcscErr.Error()
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func buildDiscoveredDevice(hw device.CompatibleModem, configured bool, configuredID string, degraded bool) discoveredDevice {
