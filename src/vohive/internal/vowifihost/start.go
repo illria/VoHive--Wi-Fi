@@ -2,6 +2,7 @@ package vowifihost
 
 import (
 	"strings"
+	"time"
 
 	"github.com/iniwex5/vohive/pkg/logger"
 	"github.com/iniwex5/vowifi-go/runtimehost"
@@ -26,7 +27,24 @@ func (m *Manager) FailStart(deviceID string, epoch uint64, state runtimehost.Sta
 	if deviceID == "" {
 		return
 	}
+	state.DeviceID = deviceID
+	state.Phase = runtimehost.PhaseFailed
+	if state.LastErrorClass == "" {
+		state.LastErrorClass = "startup"
+	}
+	if err != nil {
+		state.LastError = err.Error()
+		if state.LastReason == "" {
+			state.LastReason = err.Error()
+		}
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now()
+	}
 	m.RuntimeStore().FailStart(deviceID, epoch, state, err)
+	if failedState, ok := m.RuntimeStore().State(deviceID); ok {
+		m.notifyState(deviceID, failedState)
+	}
 	m.BroadcastState(deviceID)
 }
 

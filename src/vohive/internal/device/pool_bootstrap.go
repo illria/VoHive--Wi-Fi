@@ -35,6 +35,8 @@ func deriveESIMTransport(cfg config.DeviceConfig) string {
 		return config.ESIMTransportMBIM
 	case "at":
 		return config.ESIMTransportAT
+	case "pcsc":
+		return config.ESIMTransportPCSC
 	}
 
 	switch legacy {
@@ -69,6 +71,9 @@ func hasManagedQMINetwork(cfg config.DeviceConfig) bool {
 }
 
 func requiresQMICore(cfg config.DeviceConfig) bool {
+	if resolvedBackendMode(cfg) == backend.BackendPCSC {
+		return false
+	}
 	if requiresMBIMCore(cfg) {
 		return false
 	}
@@ -81,7 +86,7 @@ func requiresQMICore(cfg config.DeviceConfig) bool {
 // 端口时才需要。MBIM 设备靠 control_device 起、压根没有 AT 口,绝不能进 AT 反查
 // (否则会以"未找到匹配 IMEI 的 AT 端口"启动失败)。
 func needsATPortDiscovery(cfg config.DeviceConfig) bool {
-	return !requiresMBIMCore(cfg) && strings.TrimSpace(cfg.ATPort) == ""
+	return resolvedBackendMode(cfg) != backend.BackendPCSC && !requiresMBIMCore(cfg) && strings.TrimSpace(cfg.ATPort) == ""
 }
 
 func requiresMBIMCore(cfg config.DeviceConfig) bool {
@@ -125,6 +130,9 @@ func resolveDiscoveredCompatibleModem(dev CompatibleModem, timeout time.Duration
 
 func configuredDevicesNeedCompatibleATDiscovery(devices []config.DeviceConfig) bool {
 	for _, dev := range devices {
+		if resolvedBackendMode(dev) == backend.BackendPCSC {
+			continue
+		}
 		if requiresQMICore(dev) {
 			continue
 		}
@@ -222,6 +230,10 @@ func (p *Pool) AddWorkerFromConfig(devCfg config.DeviceConfig) (*Worker, error) 
 		close(watchdogStop)
 		p.endRebuildAttemptIfCurrent(devCfg.ID, attempt)
 	}()
+
+	if resolvedBackendMode(devCfg) == backend.BackendPCSC {
+		return p.addPCSCWorkerFromConfig(devCfg, attempt)
+	}
 
 	needsQMICore := requiresQMICore(devCfg)
 	if p.lifecycle != nil && needsQMICore {

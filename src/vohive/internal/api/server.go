@@ -327,6 +327,7 @@ func (s *Server) newRouter() *gin.Engine {
 
 		// ===== VoWiFi =====
 		api.PATCH("/devices/:device_id/vowifi", s.handleDeviceVoWiFiPatch)                          // 启用/禁用 VoWiFi
+		api.GET("/devices/:device_id/vowifi/history", s.handleDeviceVoWiFiHistory)                 // VoWiFi 连接历史与可用率
 		api.POST("/devices/:device_id/vowifi/actions/reconnect", s.handleDeviceMgmtReconnectVoWiFi) // 重连 VoWiFi
 		api.POST("/devices/:device_id/vowifi/e911/websheet", s.handleDeviceE911Websheet)            // 打开 E911 设置 websheet
 		// api.POST("/devices/:id/simulate-call", s.handleSimulateCall)   // 模拟呼叫

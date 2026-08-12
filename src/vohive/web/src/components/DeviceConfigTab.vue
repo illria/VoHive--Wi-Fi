@@ -29,6 +29,9 @@ const isQMIBackendOnly = computed(() => isWwanQmiControlPath(activeControlDevice
 const isMBIMBackendOnly = computed(
   () => String(props.editConfig?.device_backend || '').toLowerCase() === 'mbim'
 )
+const isPCSCBackend = computed(
+  () => String(props.editConfig?.device_backend || '').toLowerCase() === 'pcsc'
+)
 
 watch(
   isQMIBackendOnly,
@@ -76,7 +79,21 @@ watch(
       </div>
       <div class="space-y-1">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">IMEI 绑定</label>
-        <el-input v-model="editConfig.modem_imei" disabled placeholder="自动识别（添加时绑定）" />
+        <el-input v-model="editConfig.modem_imei" :disabled="!isPCSCBackend" :placeholder="isPCSCBackend ? 'VoWiFi 必填；读卡器无法自动提供' : '自动识别（添加时绑定）'" />
+      </div>
+      <div v-if="isPCSCBackend" class="space-y-1">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">PC/SC 读卡器</label>
+        <el-input v-model="editConfig.reader_name" disabled />
+      </div>
+      <div v-if="isPCSCBackend" class="space-y-1">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">卡 ICCID</label>
+        <el-input v-model="editConfig.card_iccid" disabled />
+      </div>
+      <div v-if="isPCSCBackend" class="ui-panel-muted p-3">
+        <div class="text-sm font-bold" :class="editConfig.provisioning_state === 'draft' ? 'text-amber-700' : 'text-emerald-700'">
+          {{ editConfig.provisioning_state === 'draft' ? '草稿线路 · 请补齐 IMEI' : '线路参数已就绪' }}
+        </div>
+        <div class="text-xs text-gray-500 mt-1">卡片移动到其他读卡器后，系统会继续按 ICCID 自动绑定。</div>
       </div>
       <div class="space-y-1">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">设备路径</label>
@@ -101,18 +118,20 @@ watch(
             <div class="text-xs text-gray-500 dark:text-gray-400">
               {{ isQMIBackendOnly ? '此类设备固定 QMI，AT 口仅用于终端'
                  : (isMBIMBackendOnly ? '此类设备固定 MBIM，AT 口仅用于终端'
-                 : 'AT=传统串口 / QMI=纯 QMI') }}
+		         : (isPCSCBackend ? 'PC/SC 读卡器线路，按 ICCID 自动跟踪'
+		         : 'AT=传统串口 / QMI=纯 QMI')) }}
             </div>
           </div>
           <el-select
             v-model="editConfig.device_backend"
             style="width: 120px"
             placeholder="AT"
-            :disabled="isQMIBackendOnly || isMBIMBackendOnly"
+            :disabled="isQMIBackendOnly || isMBIMBackendOnly || isPCSCBackend"
           >
-            <el-option v-if="!isMBIMBackendOnly" label="AT" value="at" :disabled="isQMIBackendOnly" />
-            <el-option v-if="!isMBIMBackendOnly" label="QMI" value="qmi" :disabled="!activeControlDevice && editConfig.device_backend !== 'qmi'" />
+			<el-option v-if="!isMBIMBackendOnly && !isPCSCBackend" label="AT" value="at" :disabled="isQMIBackendOnly" />
+			<el-option v-if="!isMBIMBackendOnly && !isPCSCBackend" label="QMI" value="qmi" :disabled="!activeControlDevice && editConfig.device_backend !== 'qmi'" />
             <el-option v-if="isMBIMBackendOnly" label="MBIM" value="mbim" />
+            <el-option v-if="isPCSCBackend" label="PC/SC" value="pcsc" />
           </el-select>
         </div>
       </div>

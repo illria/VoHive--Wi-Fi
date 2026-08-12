@@ -1004,9 +1004,17 @@ function applyDiscoveredToAddConfig(d: DiscoveredDevice | null) {
   addConfig.value.control_device = d.control_path || ''
   addConfig.value.modem_imei = d.imei || ''
   addConfig.value.usb_path = d.usb_path || ''
+  addConfig.value.reader_name = d.reader_name || ''
+  addConfig.value.card_iccid = d.iccid || ''
+  addConfig.value.provisioning_state = d.mode === 'pcsc' && !d.imei ? 'draft' : 'ready'
 
   const mode = String(d.mode || '').toLowerCase()
-  if (mode === 'mbim') {
+  if (mode === 'pcsc') {
+    addConfig.value.device_backend = 'pcsc'
+    addConfig.value.esim_transport = 'pcsc'
+    if (!addConfig.value.id && d.iccid) addConfig.value.id = `pcsc_${d.iccid.slice(-8)}`
+    if (!addConfig.value.name && d.iccid) addConfig.value.name = `eUICC · ${d.iccid.slice(-4)}`
+  } else if (mode === 'mbim') {
     addConfig.value.device_backend = 'mbim'
   } else if (isWwanQmiControlPath(d.control_path) || (mode === 'qmi' && d.control_path)) {
     addConfig.value.device_backend = 'qmi'

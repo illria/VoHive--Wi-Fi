@@ -37,7 +37,7 @@ func (a *qmiModemAdapter) DeviceID() string { return a.deviceID }
 
 // ExecuteATSilent 只保留接口占位；QMI VoWiFi 鉴权路径直接走逻辑通道。
 func (a *qmiModemAdapter) ExecuteATSilent(cmd string, timeout time.Duration) (string, error) {
-	return "", fmt.Errorf("QMI 模式不支持 AT 指令: %s", cmd)
+	return "", fmt.Errorf("%s 后端不支持 AT 指令: %s", a.backend.Mode(), cmd)
 }
 
 func (a *qmiModemAdapter) OpenLogicalChannel(aid string) (int, error) {
@@ -71,6 +71,14 @@ func (a *qmiModemAdapter) TransmitAPDU(channel int, hexAPDU string) (string, err
 }
 
 func (a *qmiModemAdapter) GetISIMIdentity() (identity.Identity, error) {
+	if provider, ok := a.backend.(interface {
+		GetISIMCredentials(context.Context) (string, string, []string, error)
+	}); ok {
+		impi, domain, impu, err := provider.GetISIMCredentials(context.Background())
+		if err == nil && (impi != "" || domain != "" || len(impu) > 0) {
+			return identity.Identity{IMPI: impi, IMPU: impu, Domain: domain}, nil
+		}
+	}
 	return identity.ReadISIMIdentity(a)
 }
 
@@ -120,6 +128,6 @@ func (a *qmiModemAdapter) GetNetworkMode() string {
 }
 
 func (a *qmiModemAdapter) Stop() {
-	logger.Info("QMI modem adapter Stop() 被调用（不关闭 Backend，由 Worker 统一管理）",
-		"device", a.deviceID)
+	logger.Info("逻辑通道 modem adapter Stop() 被调用（不关闭 Backend，由 Worker 统一管理）",
+		"device", a.deviceID, "backend", a.backend.Mode())
 }

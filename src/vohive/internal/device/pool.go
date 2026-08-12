@@ -40,6 +40,7 @@ const (
 	smsModeQMI                   // QMI WMS 驱动（EventNewSMS + 定时轮询）
 	smsModeVoWiFi                // IMS 驱动，AT/QMI 短信全禁
 	smsModeMBIM                  // MBIM SMS service 驱动（SMS_READ indication + 定时轮询）
+	smsModePCSC                  // PC/SC 读卡器；仅 VoWiFi 激活后提供短信
 )
 
 const qmiSMSStorageUnknown uint8 = 0xFF
@@ -88,6 +89,8 @@ func (m smsMode) String() string {
 		return "VoWiFi"
 	case smsModeMBIM:
 		return "MBIM"
+	case smsModePCSC:
+		return "PC/SC"
 	default:
 		return "unknown"
 	}
@@ -221,6 +224,10 @@ type Pool struct {
 	udevWatcher    *UdevWatcher
 	startOnce      sync.Once
 	policyResolver cardpolicy.Resolver
+	pcscReconcileMu sync.Mutex
+	pcscFailures    map[string]int
+	vowifiSessionMu sync.RWMutex
+	vowifiSessions  map[string]voWiFiSessionHistoryContext
 }
 
 func NewPool(cfg *config.Config) *Pool {
@@ -242,10 +249,13 @@ func NewPool(cfg *config.Config) *Pool {
 		switchContexts:        make(map[string]esimSwitchContext),
 		switchTokens:          make(map[string]uint64),
 		lifecycle:             newLifecycleCoordinator(),
+		pcscFailures:          make(map[string]int),
+		vowifiSessions:        make(map[string]voWiFiSessionHistoryContext),
 	}
 	p.transportRecovery = NewTransportRecoveryController(p)
 	p.voWiFiHost().ConfigureAdapter(p)
 	p.voWiFiHost().ConfigureRuntimeDependencies(p.GetVoiceGateway(), vowifiDeliveryStore{}, poolVoWiFiRuntimeDispatcher{pool: p})
+	p.voWiFiHost().SetStateObserver(p.recordVoWiFiHistoryState)
 
 	return p
 }
@@ -1328,6 +1338,7 @@ func (p *Pool) startPoolBackgroundServicesOnce() {
 		go p.healthCheckLoop()
 		go p.overviewStreamLoop()
 		go p.startVoWiFiDesiredReconcileLoop()
+		go p.pcscReaderReconcileLoop()
 		p.startInitialDesiredVoWiFiAutoStart(5 * time.Second)
 
 		p.udevWatcher = NewUdevWatcher(p)
@@ -2426,6 +2437,9 @@ func newESIMManagerForWorker(
 	if w == nil {
 		return nil, fmt.Errorf("worker 不能为空")
 	}
+	if resolvedBackendMode(w.Config) == backend.BackendPCSC {
+		return newPCSCEsimManager(w, onBefore, onAfter, onFailed, onDegraded, onPhase), nil
+	}
 
 	var beforeWithOperation func(esim.SwitchOperation, string) uint64
 	if onBefore != nil {
@@ -2734,6 +2748,14 @@ func (p *Pool) Shutdown() error {
 				_ = worker.ESIMQMITransport.Stop()
 			}
 		}(w)
+
+		if w.Backend != nil && strings.EqualFold(w.Backend.Mode(), backend.BackendPCSC) {
+			wg.Add(1)
+			go func(worker *Worker) {
+				defer wg.Done()
+				_ = worker.Backend.Close()
+			}(w)
+		}
 	}
 	p.mu.RUnlock()
 

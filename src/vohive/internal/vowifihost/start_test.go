@@ -13,6 +13,12 @@ func TestManagerBeginAndFailStartOwnsStartupMutationAndBroadcast(t *testing.T) {
 	deviceID := "dev-start"
 	ch, unsub := manager.SubscribeState(deviceID)
 	defer unsub()
+	observed := make(chan runtimehost.State, 1)
+	manager.SetStateObserver(func(gotDeviceID string, state runtimehost.State) {
+		if gotDeviceID == deviceID {
+			observed <- state
+		}
+	})
 
 	claim := manager.BeginStart(deviceID)
 	if !claim.Accepted {
@@ -31,6 +37,14 @@ func TestManagerBeginAndFailStartOwnsStartupMutationAndBroadcast(t *testing.T) {
 	case <-ch:
 	case <-time.After(time.Second):
 		t.Fatal("expected failure broadcast")
+	}
+	select {
+	case state := <-observed:
+		if state.Phase != runtimehost.PhaseFailed || state.LastError != "start failed" || state.LastErrorClass != "startup" {
+			t.Fatalf("observed failure state=%+v", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected failure observer callback")
 	}
 }
 

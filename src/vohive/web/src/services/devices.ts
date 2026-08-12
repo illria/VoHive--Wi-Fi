@@ -1,6 +1,6 @@
 import { api } from '../stores/auth'
 import { callService } from './http'
-import type { CarrierWebsheetInfo, DeviceConfigDTO, DiscoveredDevice, EsimNotificationItem, EsimOverviewResponse, EsimSpaceDelta, SIMSecurityState } from '../types/api'
+import type { CarrierWebsheetInfo, DeviceConfigDTO, DiscoveredDevice, EsimNotificationItem, EsimOverviewResponse, EsimSpaceDelta, SIMSecurityState, VoWiFiHistorySummary } from '../types/api'
 import type { DeviceDetailVM, DeviceListVM } from '../types/view-model'
 import axios from 'axios'
 
@@ -215,6 +215,12 @@ export const devicesService = {
     return callService(async () => {
       await api.post(`/devices/${id}/vowifi/actions/reconnect`)
       return true
+    })
+  },
+  getVoWiFiHistory(id: string, days = 7, limit = 100) {
+    return callService(async () => {
+      const res = await api.get<VoWiFiHistorySummary>(`/devices/${id}/vowifi/history`, { params: { days, limit } })
+      return res.data
     })
   },
   startE911Websheet(id: string) {

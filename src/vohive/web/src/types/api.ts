@@ -53,6 +53,36 @@ export type VoWiFiRuntimeState = {
   updated_at?: string
 }
 
+export type VoWiFiConnectionEvent = {
+  id: number
+  device_id: string
+  iccid?: string
+  phase: 'starting' | 'sim_ready' | 'tunnel_ready' | 'ims_ready' | 'sms_ready' | 'failed' | 'stopped' | string
+  stage: 'Starting' | 'SIM' | 'Access' | 'Tunnel' | 'IMS' | 'SMS' | 'Runtime' | 'Stopped' | 'Unknown' | string
+  sim_ready: boolean
+  access_ready: boolean
+  tunnel_ready: boolean
+  ims_ready: boolean
+  sms_ready: boolean
+  error_class?: string
+  reason?: string
+  detail?: string
+  upstream_proxy_id?: string
+  trace_id?: string
+  created_at: string
+}
+
+export type VoWiFiHistorySummary = {
+  device_id: string
+  window_days: number
+  availability_percent: number
+  ready_seconds: number
+  successes: number
+  failures: number
+  last_failure?: VoWiFiConnectionEvent
+  events: VoWiFiConnectionEvent[]
+}
+
 export type DeviceLifecyclePhase =
   | 'offline'
   | 'rebooting'
@@ -161,7 +191,7 @@ export type DeviceConfigDTO = {
   usb_path?: string
   apn?: string
   ip_version?: 'v4' | 'v6' | 'v4v6'
-  esim_transport?: 'at' | 'qmi'
+  esim_transport?: 'at' | 'qmi' | 'mbim' | 'pcsc'
   network_enabled?: boolean
   at_port: string
   control_device: string
@@ -169,7 +199,10 @@ export type DeviceConfigDTO = {
   qmi_proxy_path?: string
   qmi_proxy_executable?: string
   vowifi_enabled?: boolean
-  device_backend?: 'at' | 'qmi' | 'mbim'
+  device_backend?: 'at' | 'qmi' | 'mbim' | 'pcsc'
+  reader_name?: string
+  card_iccid?: string
+  provisioning_state?: 'draft' | 'ready'
   operator_selection_mode?: string
   operator_selection_plmn?: string
   operator_selection_rat?: string
@@ -308,12 +341,18 @@ export type DiscoveredDevice = {
   driver_name: string
   at_ports: string[]
   at_port: string
-  mode?: 'qmi' | 'mbim' | 'ecm' | 'rndis' | 'ncm' | 'unknown'
+  mode?: 'qmi' | 'mbim' | 'pcsc' | 'ecm' | 'rndis' | 'ncm' | 'unknown'
   network_capable?: boolean
   configured: boolean
   configured_id?: string
   degraded?: boolean
   usbnet_mode?: number
+  reader_name?: string
+  iccid?: string
+  imsi?: string
+  provisioning_state?: 'draft' | 'ready'
+  reader_only?: boolean
+  discovery_error?: string
 }
 
 export type DashboardDevice = {
@@ -461,13 +500,29 @@ export type UpstreamProxyCountryRule = {
   country_name: string
   mccs: string[]
   upstream_proxy_id: string
+  upstream_proxy_ids: string[]
+  pinned_proxy_id?: string
   enabled: boolean
+  required: boolean
+  auto_failover: boolean
+  members?: Array<{
+    upstream_proxy_id: string
+    priority: number
+    healthy?: boolean
+    stage?: string
+    last_error?: string
+    checked_at?: string
+  }>
   updated_at?: string
 }
 
 export type UpstreamProxyCountryRulePayload = {
-  upstream_proxy_id: string
+  upstream_proxy_id?: string
+  upstream_proxy_ids: string[]
+  pinned_proxy_id?: string
   enabled: boolean
+  required: boolean
+  auto_failover: boolean
 }
 
 export type OperatorSelectionMode = 'automatic' | 'manual'

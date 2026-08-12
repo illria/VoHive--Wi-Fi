@@ -43,3 +43,22 @@ func TestIMEIMatches(t *testing.T) {
 		t.Fatal("invalid (<14 digits) must never match")
 	}
 }
+
+func TestIsValidIMEIRequiresCompleteLuhnIdentity(t *testing.T) {
+	if !IsValidIMEI("490154203237518") {
+		t.Fatal("known valid IMEI should pass")
+	}
+	if !IsValidIMEI(" 490154203237518 ") {
+		t.Fatal("surrounding whitespace should be ignored")
+	}
+	for _, invalid := range []string{
+		"490154203237519",
+		"49015420323751",
+		"4901542032375180",
+		"49015420323751x",
+	} {
+		if IsValidIMEI(invalid) {
+			t.Fatalf("IsValidIMEI(%q) = true, want false", invalid)
+		}
+	}
+}

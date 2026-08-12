@@ -21,6 +21,9 @@ func deviceConfigRequiresRestart(old config.DeviceConfig, next config.DeviceConf
 	if old.ControlDevice != next.ControlDevice {
 		return true
 	}
+	if old.ReaderName != next.ReaderName || old.CardICCID != next.CardICCID {
+		return true
+	}
 	if config.NormalizeESIMTransport(old.ESIMTransport) != config.NormalizeESIMTransport(next.ESIMTransport) {
 		return true
 	}

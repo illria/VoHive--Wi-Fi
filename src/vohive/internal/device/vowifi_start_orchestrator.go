@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/iniwex5/vohive/internal/backend"
+	"github.com/iniwex5/vohive/internal/config"
 	"github.com/iniwex5/vohive/internal/db"
 	innersim "github.com/iniwex5/vohive/internal/sim"
 	"github.com/iniwex5/vohive/internal/upstreamproxy"
@@ -133,6 +134,10 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 		return startCtx, fmt.Errorf("设备 %s 不存在", deviceID)
 	}
 	startCtx.worker = w
+	p.setVoWiFiSessionHistoryContext(deviceID, traceID, "")
+	if strings.EqualFold(workerBackendMode(w), backend.BackendPCSC) && !config.IsValidIMEI(w.Config.ModemIMEI) {
+		return startCtx, fmt.Errorf("PC/SC 线路 %s 尚未填写有效的 15 位 IMEI；请先补齐并通过校验，再启用 VoWiFi", deviceID)
+	}
 
 	modemIface, errModemIface := newVoWiFiModemInterface(w, deviceID)
 	if errModemIface != nil {
@@ -140,7 +145,7 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 	}
 	startCtx.modem = modemIface
 	if _, ok := modemIface.(*qmiModemAdapter); ok {
-		logger.Info("VoWiFi 使用 QMI 模式鉴权", "trace_id", traceID, "device", deviceID)
+		logger.Info("VoWiFi 使用逻辑通道模式鉴权", "trace_id", traceID, "device", deviceID, "backend", workerBackendMode(w))
 	}
 
 	w.cacheMu.RLock()
@@ -230,6 +235,9 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 		"actual_source", prepared.IMSIdentity.ActualSource,
 		"aka_app_preference", prepared.IMSIdentity.AKAAppPreference,
 		"applied", prepared.IMSIdentity.Applied)
+	startCtx.NetworkMode = modemIface.GetNetworkMode()
+	startCtx.StartupState = newVoWiFiSIMReadyStartupState(deviceID, swu.DataplaneModeUserspace, startCtx.NetworkMode, time.Now())
+	p.recordVoWiFiStartupState(deviceID, startCtx.StartupState)
 
 	if nc := w.NetworkController(); nc != nil {
 		w.restoreNetworkAfterVoWiFi = w.Config.NetworkEnabled
@@ -264,11 +272,23 @@ func (p *Pool) prepareVoWiFiStartContext(deviceID, traceID, runtimeEPDGOverride 
 		}
 	}
 
-	startCtx.Proxy = resolveVoWiFiCountryProxy(startProfile.MCC, traceID, deviceID)
+	selectedProxy, proxyErr := resolveVoWiFiCountryProxyWithFailover(p.ctx, startProfile.MCC, traceID, deviceID)
+	if proxyErr != nil {
+		failed := startCtx.StartupState
+		failed.LastErrorClass = "proxy"
+		failed.LastError = proxyErr.Error()
+		failed.LastReason = "country_proxy_pool_unavailable"
+		failed.UpdatedAt = time.Now()
+		p.recordVoWiFiStartupState(deviceID, failed)
+		return startCtx, proxyErr
+	}
+	startCtx.Proxy = selectedProxy
+	proxyID := ""
+	if selectedProxy != nil {
+		proxyID = selectedProxy.ID
+	}
+	p.setVoWiFiSessionHistoryContext(deviceID, traceID, proxyID)
 
-	startCtx.NetworkMode = modemIface.GetNetworkMode()
-	startCtx.StartupState = newVoWiFiSIMReadyStartupState(deviceID, swu.DataplaneModeUserspace, startCtx.NetworkMode, time.Now())
-	p.recordVoWiFiStartupState(deviceID, startCtx.StartupState)
 	return startCtx, nil
 }
 
@@ -308,6 +328,47 @@ func resolveVoWiFiCountryProxy(homeMCC, traceID, deviceID string) *runtimehost.P
 	}
 }
 
+func resolveVoWiFiCountryProxyWithFailover(ctx context.Context, homeMCC, traceID, deviceID string) (*runtimehost.ProxyConfig, error) {
+	selection, err := db.SelectHomeMCCUpstreamProxy(ctx, homeMCC)
+	if err != nil {
+		logger.Warn("VoWiFi 国家代理池无可用出口",
+			"trace_id", traceID,
+			"device", deviceID,
+			"home_mcc", strings.TrimSpace(homeMCC),
+			"proxy_country_code", selection.CountryCode,
+			"proxy_attempted", strings.Join(selection.Attempted, ","),
+			"proxy_required", selection.Required,
+			"err", err)
+		return nil, err
+	}
+	if selection.Proxy == nil {
+		logger.Info("VoWiFi 国家代理池未命中或全部失败，按规则使用直连",
+			"trace_id", traceID,
+			"device", deviceID,
+			"home_mcc", strings.TrimSpace(homeMCC),
+			"proxy_country_code", selection.CountryCode,
+			"proxy_attempted", strings.Join(selection.Attempted, ","),
+			"proxy_route", "direct")
+		return nil, nil
+	}
+	proxy := selection.Proxy
+	logger.Info("VoWiFi 已从国家代理池锁定本次会话出口",
+		"trace_id", traceID,
+		"device", deviceID,
+		"home_mcc", strings.TrimSpace(homeMCC),
+		"proxy_country_code", selection.CountryCode,
+		"upstream_proxy_id", proxy.ID,
+		"proxy_attempted", strings.Join(selection.Attempted, ","),
+		"proxy_route", "country_pool")
+	return &runtimehost.ProxyConfig{
+		ID:       proxy.ID,
+		Addr:     proxy.Addr,
+		Username: proxy.Username,
+		Password: proxy.Password,
+		Enabled:  proxy.Enabled,
+	}, nil
+}
+
 func (p *Pool) beforeVoWiFiStart(deviceID string, modemIface runtimehost.Modem, proxyCfg *runtimehost.ProxyConfig) func(context.Context, runtimehost.SessionConfig) error {
 	return func(startCtx context.Context, cfg runtimehost.SessionConfig) error {
 		startupState := newVoWiFiSIMReadyStartupState(deviceID, cfg.DataplaneMode, modemIface.GetNetworkMode(), time.Now())
@@ -320,10 +381,12 @@ func (p *Pool) beforeVoWiFiStart(deviceID string, modemIface runtimehost.Modem, 
 				Password:  proxyCfg.Password,
 				Timeout:   5 * time.Second,
 			})
+			db.RecordUpstreamProxyProbe(proxyCfg.ID, probeRes, probeErr)
 			if probeErr != nil {
 				startupState.LastErrorClass = "proxy"
 				startupState.LastError = probeErr.Error()
 				startupState.LastReason = probeRes.FailureSummary()
+				startupState.UpdatedAt = time.Now()
 				p.recordVoWiFiStartupState(deviceID, startupState)
 				return fmt.Errorf("前置代理自检失败: %w", probeErr)
 			}

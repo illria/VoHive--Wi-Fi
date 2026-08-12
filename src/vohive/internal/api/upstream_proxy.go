@@ -181,19 +181,61 @@ type upstreamProxyCountryRuleResponse struct {
 	CountryName     string    `json:"country_name"`
 	MCCs            []string  `json:"mccs"`
 	UpstreamProxyID string    `json:"upstream_proxy_id"`
+	UpstreamProxyIDs []string `json:"upstream_proxy_ids"`
+	PinnedProxyID   string    `json:"pinned_proxy_id,omitempty"`
 	Enabled         bool      `json:"enabled"`
+	Required        bool      `json:"required"`
+	AutoFailover    bool      `json:"auto_failover"`
 	UpdatedAt       time.Time `json:"updated_at"`
+	Members         []upstreamProxyCountryMemberResponse `json:"members"`
+}
+
+type upstreamProxyCountryMemberResponse struct {
+	UpstreamProxyID string    `json:"upstream_proxy_id"`
+	Priority        int       `json:"priority"`
+	Healthy         *bool     `json:"healthy,omitempty"`
+	Stage           string    `json:"stage,omitempty"`
+	LastError       string    `json:"last_error,omitempty"`
+	CheckedAt       time.Time `json:"checked_at,omitempty"`
 }
 
 func buildUpstreamProxyCountryRuleResponse(rule db.UpstreamProxyCountryRule) upstreamProxyCountryRuleResponse {
 	display := upstreamproxy.CountryRuleDisplay(rule.CountryCode)
+	members, _ := db.ListUpstreamProxyCountryMembers(rule.CountryCode)
+	healthRows, _ := db.ListUpstreamProxyHealth()
+	healthByID := make(map[string]db.UpstreamProxyHealth, len(healthRows))
+	for _, health := range healthRows {
+		healthByID[health.UpstreamProxyID] = health
+	}
+	ids := make([]string, 0, len(members))
+	memberResponses := make([]upstreamProxyCountryMemberResponse, 0, len(members))
+	for _, member := range members {
+		ids = append(ids, member.UpstreamProxyID)
+		item := upstreamProxyCountryMemberResponse{UpstreamProxyID: member.UpstreamProxyID, Priority: member.Priority}
+		if health, ok := healthByID[member.UpstreamProxyID]; ok && !health.CheckedAt.IsZero() {
+			healthy := health.Healthy
+			item.Healthy = &healthy
+			item.Stage = health.Stage
+			item.LastError = health.LastError
+			item.CheckedAt = health.CheckedAt
+		}
+		memberResponses = append(memberResponses, item)
+	}
+	if len(ids) == 0 && strings.TrimSpace(rule.UpstreamProxyID) != "" {
+		ids = append(ids, strings.TrimSpace(rule.UpstreamProxyID))
+	}
 	return upstreamProxyCountryRuleResponse{
 		CountryCode:     display.CountryCode,
 		CountryName:     display.CountryName,
 		MCCs:            display.MCCs,
 		UpstreamProxyID: strings.TrimSpace(rule.UpstreamProxyID),
+		UpstreamProxyIDs: ids,
+		PinnedProxyID:   strings.TrimSpace(rule.PinnedProxyID),
 		Enabled:         rule.Enabled,
+		Required:        rule.Required,
+		AutoFailover:    rule.AutoFailover,
 		UpdatedAt:       rule.UpdatedAt,
+		Members:         memberResponses,
 	}
 }
 
@@ -229,32 +271,52 @@ func (s *Server) handleUpsertUpstreamProxyCountryRule(c *gin.Context) {
 		return
 	}
 	var req struct {
-		UpstreamProxyID string `json:"upstream_proxy_id"`
-		Enabled         bool   `json:"enabled"`
+		UpstreamProxyID  string   `json:"upstream_proxy_id"`
+		UpstreamProxyIDs []string `json:"upstream_proxy_ids"`
+		PinnedProxyID    string   `json:"pinned_proxy_id"`
+		Enabled          bool     `json:"enabled"`
+		Required         bool     `json:"required"`
+		AutoFailover     *bool    `json:"auto_failover"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "参数解析失败: " + err.Error()})
 		return
 	}
-	proxy, err := db.GetUpstreamProxyByID(req.UpstreamProxyID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+	proxyIDs := append([]string(nil), req.UpstreamProxyIDs...)
+	if len(proxyIDs) == 0 && strings.TrimSpace(req.UpstreamProxyID) != "" {
+		proxyIDs = []string{strings.TrimSpace(req.UpstreamProxyID)}
+	}
+	if len(proxyIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": "至少选择一个前置代理"})
 		return
 	}
-	if proxy == nil {
-		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "前置代理不存在"})
-		return
+	for _, proxyID := range proxyIDs {
+		proxy, err := db.GetUpstreamProxyByID(proxyID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
+			return
+		}
+		if proxy == nil {
+			c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": "前置代理不存在: " + proxyID})
+			return
+		}
+	}
+	autoFailover := true
+	if req.AutoFailover != nil {
+		autoFailover = *req.AutoFailover
 	}
 	rule := db.UpstreamProxyCountryRule{
 		CountryCode:     countryCode,
-		UpstreamProxyID: proxy.ID,
+		UpstreamProxyID: strings.TrimSpace(proxyIDs[0]),
+		PinnedProxyID:   strings.TrimSpace(req.PinnedProxyID),
 		Enabled:         req.Enabled,
+		Required:        req.Required,
+		AutoFailover:    autoFailover,
 	}
-	if err := db.UpsertUpstreamProxyCountryRule(rule); err != nil {
+	if err := db.UpsertUpstreamProxyCountryRuleSet(rule, proxyIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "message": err.Error()})
 		return
 	}
-	rule.UpstreamProxyID = proxy.ID
 	rule.CountryCode = countryCode
 	c.JSON(http.StatusOK, buildUpstreamProxyCountryRuleResponse(rule))
 }

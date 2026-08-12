@@ -129,12 +129,12 @@ deps() {
 
   if command -v apt-get >/dev/null 2>&1; then
     root apt-get update
-    root env DEBIAN_FRONTEND=noninteractive apt-get install -y socat usbutils pciutils
+    root env DEBIAN_FRONTEND=noninteractive apt-get install -y socat usbutils pciutils pcscd libpcsclite1 libccid
   elif command -v apk >/dev/null 2>&1; then
-    root apk add --no-cache socat usbutils pciutils
+    root apk add --no-cache socat usbutils pciutils pcsc-lite pcsc-lite-libs ccid
   elif command -v opkg >/dev/null 2>&1; then
     root opkg update || true
-    root opkg install socat usbutils pciutils || true
+    root opkg install socat usbutils pciutils pcscd pcsc-lite ccid || true
   else
     log "未识别包管理器，跳过可选依赖"
   fi

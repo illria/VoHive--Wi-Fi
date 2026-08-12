@@ -13,6 +13,7 @@ const (
 	BackendAT   = "at"
 	BackendQMI  = "qmi"
 	BackendMBIM = "mbim"
+	BackendPCSC = "pcsc"
 )
 
 // NormalizeBackendMode 标准化后端模式字符串
@@ -24,6 +25,8 @@ func NormalizeBackendMode(in string) string {
 		return BackendQMI
 	case BackendMBIM:
 		return BackendMBIM
+	case BackendPCSC:
+		return BackendPCSC
 	default:
 		return BackendAT
 	}
@@ -32,10 +35,10 @@ func NormalizeBackendMode(in string) string {
 // ValidateBackendMode 验证后端模式是否有效
 func ValidateBackendMode(in string) error {
 	switch NormalizeBackendMode(in) {
-	case BackendAT, BackendQMI, BackendMBIM:
+	case BackendAT, BackendQMI, BackendMBIM, BackendPCSC:
 		return nil
 	default:
-		return fmt.Errorf("无效的 device_backend 值: %q (可选: at, qmi, mbim)", in)
+		return fmt.Errorf("无效的 device_backend 值: %q (可选: at, qmi, mbim, pcsc)", in)
 	}
 }
 
@@ -69,6 +72,9 @@ func NewBackend(mode, controlPath string, m *modem.Manager, source QMISource, mb
 		}
 		logger.Info("[backend] 使用 MBIM 后端模式", "control_path", controlPath)
 		return NewMBIMBackend(controlPath, mbimSource), nil
+
+	case BackendPCSC:
+		return nil, fmt.Errorf("PC/SC 后端必须通过 reader_name 初始化")
 
 	default:
 		return nil, fmt.Errorf("不支持的后端模式: %s", mode)

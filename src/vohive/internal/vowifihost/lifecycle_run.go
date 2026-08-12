@@ -88,9 +88,15 @@ func (m *Manager) enableRuntime(ctx context.Context, req runtimeEnableRequest) (
 	}
 	startupEpoch := startClaim.Epoch
 	startFinalized := false
+	failedState := runtimehost.State{}
 	defer func() {
 		if !startFinalized {
-			m.FailStart(deviceID, startupEpoch, runtimehost.State{}, retErr)
+			if failedState.DeviceID == "" {
+				if current, ok := m.State(deviceID); ok {
+					failedState = current
+				}
+			}
+			m.FailStart(deviceID, startupEpoch, failedState, retErr)
 		}
 	}()
 
@@ -122,6 +128,7 @@ func (m *Manager) enableRuntime(ctx context.Context, req runtimeEnableRequest) (
 		if !ok {
 			state = initialState
 		}
+		failedState = state
 		return adapter.HandleStartupError(StartupErrorRequest{
 			TraceID:             traceID,
 			DeviceID:            deviceID,

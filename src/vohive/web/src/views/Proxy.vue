@@ -304,13 +304,13 @@ const upstreamForm = ref<UpstreamProxy>({
 const countryRuleDrawerOpen = ref(false)
 const countryRuleTargetProxy = ref<UpstreamProxy | null>(null)
 const selectedCountryCode = ref('')
+const countryRuleRequired = ref(false)
+const countryRuleAutoFailover = ref(true)
+const countryRulePinTarget = ref(false)
 
 const availableCountries = computed(() => {
   if (!countryRuleTargetProxy.value) return []
-  return upstreamStore.countries.filter((country) => {
-    const rule = upstreamStore.getRuleForCountry(country.country_code)
-    return !rule || rule.upstream_proxy_id === countryRuleTargetProxy.value!.id
-  })
+  return upstreamStore.countries
 })
 
 const currentProxyCountryRules = computed(() => {
@@ -418,7 +418,7 @@ async function saveUpstreamForm() {
 
 async function deleteUpstream(proxy: UpstreamProxy) {
   const confirmed = await ElMessageBox.confirm(
-    `确定删除前置代理「${proxy.name || proxy.id}」？\n绑定到该代理的国家规则将自动删除，相关国家会恢复直连。`,
+    `确定删除前置代理「${proxy.name || proxy.id}」？\n它会从国家代理池中移除；仅当代理池没有其他出口时，该国家才会恢复直连。`,
     '确认删除',
     { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
   ).then(() => true).catch(() => false)
@@ -442,6 +442,13 @@ function openCountryRuleDrawer(proxy: UpstreamProxy) {
   countryRuleDrawerOpen.value = true
 }
 
+watch(selectedCountryCode, (countryCode) => {
+  const rule = countryCode ? upstreamStore.getRuleForCountry(countryCode) : null
+  countryRuleRequired.value = !!rule?.required
+  countryRuleAutoFailover.value = rule?.auto_failover !== false
+  countryRulePinTarget.value = !!rule && rule.pinned_proxy_id === countryRuleTargetProxy.value?.id
+})
+
 async function doUpsertCountryRule() {
   if (!countryRuleTargetProxy.value || !selectedCountryCode.value) {
     ElMessage.warning('请选择国家')
@@ -449,9 +456,15 @@ async function doUpsertCountryRule() {
   }
 
   try {
+    const existing = upstreamStore.getRuleForCountry(selectedCountryCode.value)
+    const existingIDs = existing?.upstream_proxy_ids || (existing?.upstream_proxy_id ? [existing.upstream_proxy_id] : [])
+    const proxyIDs = Array.from(new Set([...existingIDs, countryRuleTargetProxy.value.id]))
     const result = await upstreamStore.upsertCountryRule(selectedCountryCode.value, {
-      upstream_proxy_id: countryRuleTargetProxy.value.id,
-      enabled: true
+      upstream_proxy_ids: proxyIDs,
+      pinned_proxy_id: countryRulePinTarget.value ? countryRuleTargetProxy.value.id : (existing?.pinned_proxy_id || proxyIDs[0]),
+      enabled: true,
+      required: countryRuleRequired.value,
+      auto_failover: countryRuleAutoFailover.value
     })
     if (!result.ok) throw new Error(result.error.message || '保存规则失败')
     ElMessage.success('国家规则已保存')
@@ -465,9 +478,20 @@ async function doUpsertCountryRule() {
 
 async function doDeleteCountryRule(countryCode: string) {
   try {
-    const result = await upstreamStore.deleteCountryRule(countryCode)
-    if (!result.ok) throw new Error(result.error.message || '删除规则失败')
-    ElMessage.success('国家规则已删除，该国家将默认直连')
+    const rule = upstreamStore.getRuleForCountry(countryCode)
+    const targetID = countryRuleTargetProxy.value?.id || ''
+    const remaining = (rule?.upstream_proxy_ids || (rule?.upstream_proxy_id ? [rule.upstream_proxy_id] : [])).filter(id => id !== targetID)
+    const result = remaining.length === 0
+      ? await upstreamStore.deleteCountryRule(countryCode)
+      : await upstreamStore.upsertCountryRule(countryCode, {
+          upstream_proxy_ids: remaining,
+          pinned_proxy_id: rule?.pinned_proxy_id === targetID ? remaining[0] : rule?.pinned_proxy_id,
+          enabled: rule?.enabled !== false,
+          required: !!rule?.required,
+          auto_failover: rule?.auto_failover !== false
+        })
+    if (!result.ok) throw new Error(result.error.message || '更新规则失败')
+    ElMessage.success(remaining.length ? '已从该国家代理池移除' : '国家规则已删除，该国家将默认直连')
     await fetchUpstream()
   } catch (e: unknown) {
     const err = toAppError(e)
@@ -869,7 +893,7 @@ usePollingScheduler(() => fetchUpstream({ silent: true }), 10000, {
         <div class="space-y-4">
           <div class="flex items-center gap-2 pb-2 border-b border-gray-100 dark:border-gray-800">
             <div class="w-1 h-4 bg-green-500 rounded-full"></div>
-            <h3 class="text-sm font-bold text-gray-900 dark:text-gray-100">已路由到该代理的国家</h3>
+            <h3 class="text-sm font-bold text-gray-900 dark:text-gray-100">包含该出口的国家代理池</h3>
           </div>
 
           <EmptyState
@@ -891,10 +915,32 @@ usePollingScheduler(() => fetchUpstream({ silent: true }), 10000, {
                     {{ rule.country_code }} · {{ rule.country_name || rule.country_code }}
                   </div>
                   <div class="text-xs text-gray-400 font-mono truncate">MCC {{ rule.mccs.join('/') || '-' }}</div>
+                  <div class="text-xs text-gray-500 mt-1">
+                    {{ (rule.upstream_proxy_ids || [rule.upstream_proxy_id]).length }} 个出口
+                    · {{ rule.auto_failover ? '自动故障切换' : '固定首选' }}
+                    · {{ rule.required ? '禁止直连回退' : '允许直连回退' }}
+                  </div>
+                  <div v-if="rule.members?.length" class="mt-2 flex flex-wrap gap-1.5">
+                    <span
+                      v-for="member in rule.members"
+                      :key="member.upstream_proxy_id"
+                      class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-mono"
+                      :class="member.healthy === true
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : member.healthy === false
+                          ? 'border-red-200 bg-red-50 text-red-700'
+                          : 'border-gray-200 bg-gray-50 text-gray-500'"
+                      :title="member.last_error || member.stage || '尚未探测'"
+                    >
+                      <span class="w-1.5 h-1.5 rounded-full" :class="member.healthy === true ? 'bg-emerald-500' : member.healthy === false ? 'bg-red-500' : 'bg-gray-400'"></span>
+                      {{ member.upstream_proxy_id }}
+                      <span v-if="rule.pinned_proxy_id === member.upstream_proxy_id">· 首选</span>
+                    </span>
+                  </div>
                 </div>
               </div>
               <el-button size="small" type="danger" text @click="doDeleteCountryRule(rule.country_code)">
-                删除规则
+                移出代理池
               </el-button>
             </div>
           </div>
@@ -918,7 +964,7 @@ usePollingScheduler(() => fetchUpstream({ silent: true }), 10000, {
                 <div class="flex items-center justify-between w-full">
                   <span>{{ country.country_code }} · {{ country.country_name || country.country_code }}</span>
                   <el-tag
-                    v-if="upstreamStore.getRuleForCountry(country.country_code)?.upstream_proxy_id === countryRuleTargetProxy?.id"
+                    v-if="(upstreamStore.getRuleForCountry(country.country_code)?.upstream_proxy_ids || [upstreamStore.getRuleForCountry(country.country_code)?.upstream_proxy_id || '']).includes(countryRuleTargetProxy?.id || '')"
                     size="small"
                     type="success"
                     class="ml-2"
@@ -935,9 +981,15 @@ usePollingScheduler(() => fetchUpstream({ silent: true }), 10000, {
             </el-button>
           </div>
 
+          <div v-if="selectedCountryCode" class="ui-panel-muted p-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <el-switch v-model="countryRuleAutoFailover" active-text="自动切换" inactive-text="固定首选" />
+            <el-switch v-model="countryRuleRequired" active-text="必须走代理" inactive-text="允许直连" />
+            <el-switch v-model="countryRulePinTarget" active-text="设为首选" inactive-text="按原顺序" />
+          </div>
+
           <el-alert type="info" :closable="false" show-icon class="!py-2">
             <template #default>
-              <span class="text-xs">规则按 SIM 归属 MCC 解析国家。例如 US 会覆盖 MCC 310/311/312/313/314/315/316 等表内分组；没有配置规则的国家默认直连。需要重启 VoWiFi 生效。</span>
+              <span class="text-xs">同一国家可配置多个出口。启动时按首选和顺序探测，失败才切换；会话建立后不会中途换出口。开启“必须走代理”后，代理池全部失败会阻止 VoWiFi 启动，避免归属地出口泄漏。</span>
             </template>
           </el-alert>
         </div>

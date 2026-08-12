@@ -28,7 +28,9 @@ func (p *Pool) restoreSMSModeAfterVoWiFiTeardown(w *Worker) {
 		return
 	}
 
-	if w.Backend != nil && w.Backend.Mode() != "at" {
+	if w.Backend != nil && w.Backend.Mode() == backend.BackendPCSC {
+		w.smsMode = smsModePCSC
+	} else if w.Backend != nil && w.Backend.Mode() != "at" {
 		w.smsMode = smsModeQMI
 		if w.Modem != nil {
 			w.Modem.SetDisableURCRead(true)

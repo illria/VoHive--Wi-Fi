@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +11,37 @@ import (
 
 	"github.com/iniwex5/vohive/internal/upstreamproxy"
 )
+
+func startDBProxyProbeServer(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error=%v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				greeting := make([]byte, 3)
+				if _, err := io.ReadFull(conn, greeting); err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte{0x05, 0x00})
+				request := make([]byte, 10)
+				if _, err := io.ReadFull(conn, request); err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x17, 0x70})
+			}(conn)
+		}
+	}()
+	return listener.Addr().String()
+}
 
 func openTestDB(t *testing.T) {
 	t.Helper()
@@ -82,5 +115,42 @@ func TestUpstreamProxyCountryRuleDirectWhenUnknownMCCOrMissingProxy(t *testing.T
 	proxy, country, err = GetHomeMCCUpstreamProxy("310")
 	if err != nil || proxy != nil || country != "US" {
 		t.Fatalf("missing proxy proxy=%+v country=%q err=%v, want nil/US/nil", proxy, country, err)
+	}
+}
+
+func TestSelectHomeMCCUpstreamProxyFailsOverToSecondMember(t *testing.T) {
+	openTestDB(t)
+	goodAddr := startDBProxyProbeServer(t)
+	closedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error=%v", err)
+	}
+	badAddr := closedListener.Addr().String()
+	_ = closedListener.Close()
+	for _, proxy := range []UpstreamProxy{
+		{ID: "bad", Addr: badAddr, Enabled: true},
+		{ID: "good", Addr: goodAddr, Enabled: true},
+	} {
+		if err := UpsertUpstreamProxy(proxy); err != nil {
+			t.Fatalf("UpsertUpstreamProxy(%s) error=%v", proxy.ID, err)
+		}
+	}
+	rule := UpstreamProxyCountryRule{CountryCode: "US", Enabled: true, Required: true, AutoFailover: true, PinnedProxyID: "bad"}
+	if err := UpsertUpstreamProxyCountryRuleSet(rule, []string{"bad", "good"}); err != nil {
+		t.Fatalf("UpsertUpstreamProxyCountryRuleSet() error=%v", err)
+	}
+	selection, err := SelectHomeMCCUpstreamProxy(context.Background(), "310")
+	if err != nil {
+		t.Fatalf("SelectHomeMCCUpstreamProxy() error=%v", err)
+	}
+	if selection.Proxy == nil || selection.Proxy.ID != "good" || len(selection.Attempted) != 2 {
+		t.Fatalf("selection=%+v", selection)
+	}
+	selection, err = SelectHomeMCCUpstreamProxy(context.Background(), "310")
+	if err != nil {
+		t.Fatalf("second SelectHomeMCCUpstreamProxy() error=%v", err)
+	}
+	if selection.Proxy == nil || selection.Proxy.ID != "good" || len(selection.Attempted) != 1 {
+		t.Fatalf("second selection=%+v, want cooling bad endpoint skipped behind healthy endpoint", selection)
 	}
 }

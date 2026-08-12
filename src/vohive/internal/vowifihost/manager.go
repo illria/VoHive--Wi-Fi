@@ -2,6 +2,7 @@ package vowifihost
 
 import (
 	"context"
+	"sync"
 
 	"github.com/iniwex5/vowifi-go/runtimehost"
 	"github.com/iniwex5/vowifi-go/runtimehost/eventhost"
@@ -19,6 +20,8 @@ type Manager struct {
 	voiceGateway  *voicehost.Gateway
 	deliveryStore messaging.DeliveryStore
 	dispatcher    eventhost.Dispatcher
+	observerMu    sync.RWMutex
+	stateObserver func(string, runtimehost.State)
 }
 
 func NewManager() *Manager {
@@ -64,8 +67,30 @@ func (m *Manager) RecordStartupState(deviceID string, state runtimehost.State) b
 	if !m.RuntimeStore().RecordStartupState(deviceID, state) {
 		return false
 	}
+	m.notifyState(deviceID, state)
 	m.BroadcastState(deviceID)
 	return true
+}
+
+func (m *Manager) SetStateObserver(observer func(string, runtimehost.State)) {
+	if m == nil {
+		return
+	}
+	m.observerMu.Lock()
+	m.stateObserver = observer
+	m.observerMu.Unlock()
+}
+
+func (m *Manager) notifyState(deviceID string, state runtimehost.State) {
+	if m == nil {
+		return
+	}
+	m.observerMu.RLock()
+	observer := m.stateObserver
+	m.observerMu.RUnlock()
+	if observer != nil {
+		observer(deviceID, state)
+	}
 }
 
 func (m *Manager) ClearStartupState(deviceID string) bool {

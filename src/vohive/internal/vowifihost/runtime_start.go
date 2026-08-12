@@ -115,6 +115,7 @@ func (m *Manager) StartRuntime(ctx context.Context, req RuntimeStartRequest) (Ru
 
 	inst.AddObserver(runtimehost.ObserverFunc(func(_ context.Context, ev runtimehost.Event) {
 		if m.IsCurrentInstance(deviceID, inst) {
+			m.notifyState(deviceID, ev.State)
 			m.BroadcastState(deviceID)
 			return
 		}

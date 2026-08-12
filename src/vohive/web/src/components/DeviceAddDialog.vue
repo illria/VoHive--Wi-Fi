@@ -41,6 +41,7 @@ function discoveryModeText(d: DiscoveredDevice | null | undefined): string {
   const mode = String(d?.mode || 'unknown').toLowerCase()
   if (mode === 'qmi') return 'QMI'
   if (mode === 'mbim') return 'MBIM'
+  if (mode === 'pcsc') return 'PC/SC'
   if (mode === 'ecm') return 'ECM'
   if (mode === 'rndis') return 'RNDIS'
   if (mode === 'ncm') return 'NCM'
@@ -51,12 +52,24 @@ const isQMIBackendOnly = computed(() => isWwanQmiControlPath(props.addSelected?.
 const isMBIMBackendOnly = computed(
   () => String(props.addSelected?.mode || '').toLowerCase() === 'mbim'
 )
+const isPCSCReader = computed(() => String(props.addSelected?.mode || '').toLowerCase() === 'pcsc')
 
 watch(
   isQMIBackendOnly,
   (locked) => {
     if (locked && props.addConfig) {
       props.addConfig.device_backend = 'qmi'
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  isPCSCReader,
+  (locked) => {
+    if (locked && props.addConfig) {
+      props.addConfig.device_backend = 'pcsc'
+      props.addConfig.esim_transport = 'pcsc'
     }
   },
   { immediate: true }
@@ -99,17 +112,19 @@ watch(
             !d.degraded && discoveryIdentity(addSelected) !== discoveryIdentity(d) ? 'border-gray-200 hover:bg-gray-50' : ''
           ]"
           :aria-disabled="!!d.degraded"
-          @click="emit('select-device', d)"
+		  :disabled="!!d.degraded"
+		  @click="emit('select-device', d)"
         >
           <div class="font-bold text-gray-800 flex items-center gap-2">
-            <span>{{ d.net_interface || '--' }} · {{ d.driver_name || '--' }}</span>
+            <span>{{ d.reader_name || d.net_interface || '--' }} · {{ d.driver_name || '--' }}</span>
             <el-tag size="small" :type="isQmiDiscovery(d) ? 'success' : 'warning'">{{ discoveryModeText(d) }}</el-tag>
           </div>
           <div class="text-xs text-gray-500 mt-0.5 truncate">
-            {{ d.control_path }} · AT: {{ d.at_port || '--' }} · IMEI: {{ d.imei || '--' }} · USB: {{ d.usb_path || '--' }}
+            <template v-if="d.reader_only">ICCID: {{ d.iccid || '--' }} · IMSI: {{ d.imsi || '--' }}</template>
+            <template v-else>{{ d.control_path }} · AT: {{ d.at_port || '--' }} · IMEI: {{ d.imei || '--' }} · USB: {{ d.usb_path || '--' }}</template>
           </div>
           <div v-if="d.degraded" class="text-xs text-amber-700 mt-1">
-            无法读取 IMEI（控制口可能挂死），暂不可添加。
+            {{ d.discovery_error || (d.reader_only ? '读卡器中未读取到可用 ICCID。' : '无法读取 IMEI（控制口可能挂死），暂不可添加。') }}
           </div>
         </button>
         <div v-if="unconfiguredDiscovered.length === 0" class="text-sm text-gray-500 p-3">
@@ -126,10 +141,14 @@ watch(
           <el-tag size="small" :type="isQmiDiscovery(addSelected) ? 'success' : 'warning'">{{ discoveryModeText(addSelected) }}</el-tag>
           <el-tag v-if="isQMIBackendOnly" size="small" type="success">仅 QMI 后端</el-tag>
           <el-tag v-if="isMBIMBackendOnly" size="small" type="success">仅 MBIM 后端</el-tag>
+          <el-tag v-if="isPCSCReader" size="small" type="info">读卡器线路</el-tag>
         </div>
       </div>
       <div v-if="isQMIBackendOnly" class="text-xs text-emerald-700">
         此类 WWAN QMI 设备运行后端固定为 QMI；AT 口仍会保留给 AT 终端。
+      </div>
+      <div v-if="isPCSCReader" class="text-xs text-amber-700">
+        线路按 ICCID 绑定；IMEI 属于 VoWiFi 注册参数，不会从读卡器伪造。留空将保存为草稿。
       </div>
     </div>
 
@@ -144,7 +163,15 @@ watch(
       </div>
       <div class="space-y-1">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">IMEI 绑定</label>
-        <el-input v-model="addConfig.modem_imei" disabled placeholder="自动识别（从发现设备填充）" />
+        <el-input v-model="addConfig.modem_imei" :disabled="!isPCSCReader" :placeholder="isPCSCReader ? '可稍后填写；留空为草稿' : '自动识别（从发现设备填充）'" />
+      </div>
+      <div v-if="isPCSCReader" class="space-y-1">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">PC/SC 读卡器</label>
+        <el-input v-model="addConfig.reader_name" disabled />
+      </div>
+      <div v-if="isPCSCReader" class="space-y-1">
+        <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">卡 ICCID</label>
+        <el-input v-model="addConfig.card_iccid" disabled />
       </div>
       <div class="space-y-1">
         <label class="text-xs font-bold text-gray-500 uppercase tracking-wider">USB 路径</label>
@@ -168,18 +195,20 @@ watch(
           <div class="text-xs text-gray-500">
             {{ isQMIBackendOnly ? '固定 QMI，AT 口仅用于终端'
                : (isMBIMBackendOnly ? '固定 MBIM，AT 口仅用于终端'
-               : 'AT=串口 / QMI=纯 QMI') }}
+		       : (isPCSCReader ? 'PC/SC=读卡器直连，按 ICCID 绑定'
+		       : 'AT=串口 / QMI=纯 QMI')) }}
           </div>
         </div>
         <el-select
           v-model="addConfig.device_backend"
           style="width: 110px"
           placeholder="AT"
-          :disabled="isQMIBackendOnly || isMBIMBackendOnly"
+          :disabled="isQMIBackendOnly || isMBIMBackendOnly || isPCSCReader"
         >
-          <el-option v-if="!isMBIMBackendOnly" label="AT" value="at" :disabled="isQMIBackendOnly" />
-          <el-option v-if="!isMBIMBackendOnly" label="QMI" value="qmi" :disabled="!addConfig.control_device" />
+		  <el-option v-if="!isMBIMBackendOnly && !isPCSCReader" label="AT" value="at" :disabled="isQMIBackendOnly" />
+		  <el-option v-if="!isMBIMBackendOnly && !isPCSCReader" label="QMI" value="qmi" :disabled="!addConfig.control_device" />
           <el-option v-if="isMBIMBackendOnly" label="MBIM" value="mbim" />
+          <el-option v-if="isPCSCReader" label="PC/SC" value="pcsc" />
         </el-select>
       </div>
     </div>

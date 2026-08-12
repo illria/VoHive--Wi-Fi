@@ -71,7 +71,7 @@ export const useUpstreamProxyStore = defineStore('upstreamProxy', () => {
 
   // 获取某个代理的国家规则列表
   function getRulesForProxy(proxyId: string): UpstreamProxyCountryRule[] {
-    return countryRules.value.filter(rule => rule.upstream_proxy_id === proxyId)
+    return countryRules.value.filter(rule => (rule.upstream_proxy_ids || [rule.upstream_proxy_id]).includes(proxyId))
   }
 
   // 获取某个国家已配置的规则

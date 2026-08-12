@@ -52,6 +52,9 @@ type deviceConfigDTO struct {
 	NetworkEnabled        bool    `json:"network_enabled"`
 	VoWiFiEnabled         bool    `json:"vowifi_enabled"`
 	DeviceBackend         string  `json:"device_backend,omitempty"`
+	ReaderName            string  `json:"reader_name,omitempty"`
+	CardICCID             string  `json:"card_iccid,omitempty"`
+	ProvisioningState     string  `json:"provisioning_state,omitempty"`
 }
 
 func deviceConfigToDTO(c config.DeviceConfig) deviceConfigDTO {
@@ -81,6 +84,9 @@ func deviceConfigToDTO(c config.DeviceConfig) deviceConfigDTO {
 		NetworkEnabled:        c.NetworkEnabled,
 		VoWiFiEnabled:         c.VoWiFiEnabled,
 		DeviceBackend:         c.DeviceBackend,
+		ReaderName:            c.ReaderName,
+		CardICCID:             c.CardICCID,
+		ProvisioningState:     c.ProvisioningState,
 	}
 }
 
@@ -96,10 +102,22 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 	qmiUseProxy := false
 	qmiProxyPath := ""
 	qmiProxyExecutable := ""
+	readerName := strings.TrimSpace(d.ReaderName)
+	cardICCID := strings.TrimSpace(d.CardICCID)
+	provisioningState := strings.TrimSpace(d.ProvisioningState)
 	if base != nil {
 		qmiUseProxy = base.QMIUseProxy
 		qmiProxyPath = base.QMIProxyPath
 		qmiProxyExecutable = base.QMIProxyExecutable
+		if readerName == "" {
+			readerName = base.ReaderName
+		}
+		if cardICCID == "" {
+			cardICCID = base.CardICCID
+		}
+		if provisioningState == "" {
+			provisioningState = base.ProvisioningState
+		}
 	}
 	if d.QMIUseProxy != nil {
 		qmiUseProxy = *d.QMIUseProxy
@@ -136,6 +154,9 @@ func deviceConfigFromDTOWithBase(d deviceConfigDTO, base *config.DeviceConfig) c
 		NetworkEnabled:        d.NetworkEnabled,
 		VoWiFiEnabled:         d.VoWiFiEnabled,
 		DeviceBackend:         d.DeviceBackend,
+		ReaderName:            strings.TrimSpace(readerName),
+		CardICCID:             strings.TrimSpace(cardICCID),
+		ProvisioningState:     strings.TrimSpace(provisioningState),
 	}
 }
 
@@ -1003,6 +1024,12 @@ type discoveredDevice struct {
 	Configured     bool     `json:"configured"`
 	ConfiguredID   string   `json:"configured_id,omitempty"`
 	Degraded       bool     `json:"degraded,omitempty"` // 探不到 IMEI,无法确立身份,不可直接添加
+	ReaderName     string   `json:"reader_name,omitempty"`
+	ICCID          string   `json:"iccid,omitempty"`
+	IMSI           string   `json:"imsi,omitempty"`
+	ProvisioningState string `json:"provisioning_state,omitempty"`
+	ReaderOnly     bool     `json:"reader_only,omitempty"`
+	DiscoveryError string   `json:"discovery_error,omitempty"`
 }
 
 var discoverQMIForMgmtFn = device.DiscoverQMIDevices
@@ -1023,6 +1050,13 @@ func ensureAddDeviceIMEI(cfg config.DeviceConfig, probe func(string) (string, er
 	return cfg, nil
 }
 
+func pcscProvisioningStateForAPI(imei string) string {
+	if !config.IsValidIMEI(imei) {
+		return "draft"
+	}
+	return "ready"
+}
+
 func (s *Server) handleDeviceMgmtDiscovered(c *gin.Context) {
 	discoveredQMI, err := discoverQMIForMgmtFn()
 	if err != nil {
@@ -1031,8 +1065,7 @@ func (s *Server) handleDeviceMgmtDiscovered(c *gin.Context) {
 
 	list, err := discoverCompatibleModemsFromQMIFn(discoveredQMI)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"devices": []discoveredDevice{}})
-		return
+		list = nil
 	}
 
 	withIMEI := strings.TrimSpace(c.Query("with_imei")) == "1"
@@ -1111,6 +1144,53 @@ func (s *Server) handleDeviceMgmtDiscovered(c *gin.Context) {
 	}
 	for _, hw := range resolved.Degraded {
 		out = append(out, buildDiscoveredDevice(hw, false, "", true))
+	}
+
+	var pcscReaders []device.PCSCReaderDevice
+	var pcscErr error
+	if s.pool != nil {
+		pcscReaders, pcscErr = s.pool.DiscoverPCSCReaders(c.Request.Context())
+	} else {
+		pcscReaders, pcscErr = device.DiscoverPCSCReaders(c.Request.Context())
+	}
+	if pcscErr == nil {
+		for _, reader := range pcscReaders {
+			configured, configuredID, state := false, "", "draft"
+			for _, cfg := range managed {
+				if strings.TrimSpace(reader.ICCID) != "" && strings.EqualFold(strings.TrimSpace(cfg.CardICCID), strings.TrimSpace(reader.ICCID)) {
+					configured = true
+					configuredID = cfg.ID
+					state = strings.TrimSpace(cfg.ProvisioningState)
+					if state == "" {
+						state = "ready"
+					}
+					break
+				}
+			}
+			out = append(out, discoveredDevice{
+				DiscoveryKey:       "pcsc:" + strings.TrimSpace(reader.ReaderName),
+				Mode:               backend.BackendPCSC,
+				DriverName:         "PC/SC",
+				ReaderName:         strings.TrimSpace(reader.ReaderName),
+				ICCID:              strings.TrimSpace(reader.ICCID),
+				IMSI:               strings.TrimSpace(reader.IMSI),
+				Configured:         configured,
+				ConfiguredID:       configuredID,
+				ProvisioningState:  state,
+				ReaderOnly:         true,
+				Degraded:           reader.Error != "" || strings.TrimSpace(reader.ICCID) == "",
+				DiscoveryError:     strings.TrimSpace(reader.Error),
+			})
+		}
+	} else {
+		out = append(out, discoveredDevice{
+			DiscoveryKey:   "pcsc:unavailable",
+			Mode:           backend.BackendPCSC,
+			DriverName:     "PC/SC",
+			ReaderOnly:     true,
+			Degraded:       true,
+			DiscoveryError: "PC/SC 服务不可用: " + pcscErr.Error(),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"devices": out})
@@ -1267,6 +1347,9 @@ func detectDeviceBindingConflictInList(cfg config.DeviceConfig, excludeID string
 	if v := strings.TrimSpace(cfg.ATPort); v != "" {
 		keys = append(keys, key{field: "at_port", value: v})
 	}
+	if v := strings.TrimSpace(cfg.CardICCID); v != "" {
+		keys = append(keys, key{field: "card_iccid", value: v})
+	}
 	if len(keys) == 0 {
 		return nil
 	}
@@ -1301,6 +1384,10 @@ func detectDeviceBindingConflictInList(cfg config.DeviceConfig, excludeID string
 				if strings.TrimSpace(existing.ATPort) == k.value {
 					return &deviceBindingConflict{Field: k.field, Value: k.value, OtherID: existingID}
 				}
+			case "card_iccid":
+				if strings.EqualFold(strings.TrimSpace(existing.CardICCID), k.value) {
+					return &deviceBindingConflict{Field: k.field, Value: k.value, OtherID: existingID}
+				}
 			}
 		}
 	}
@@ -1332,6 +1419,10 @@ func (s *Server) handleDeviceMgmtUpdateDevice(c *gin.Context) {
 	req.Config.ID = id
 	newCfg := deviceConfigFromDTOWithBase(req.Config, oldMD)
 	newCfg, forcedWarning := normalizeManagedDeviceConfig(newCfg)
+	if strings.EqualFold(strings.TrimSpace(newCfg.DeviceBackend), backend.BackendPCSC) {
+		newCfg.ESIMTransport = config.ESIMTransportPCSC
+		newCfg.ProvisioningState = pcscProvisioningStateForAPI(newCfg.ModemIMEI)
+	}
 	if err := validateManagedNetworkConfig(newCfg); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "message": err.Error()})
 		return
@@ -1370,8 +1461,12 @@ func (s *Server) handleDeviceMgmtUpdateDevice(c *gin.Context) {
 	s.pool.UpdateWorkerConfig(id, newCfg, !requiresRestart)
 
 	// 检测 DeviceBackend 状态变化，或 VoWiFi 从开启变为关闭都需要彻底重建 Worker 释放残余句柄
+	pcscRequiresRebuild := requiresRestart &&
+		(strings.EqualFold(strings.TrimSpace(oldCfg.DeviceBackend), backend.BackendPCSC) ||
+			strings.EqualFold(strings.TrimSpace(newCfg.DeviceBackend), backend.BackendPCSC))
 	needsRebuild := oldCfg.DeviceBackend != newCfg.DeviceBackend ||
 		qmiProxyConfigChanged(oldCfg, newCfg) ||
+		pcscRequiresRebuild ||
 		(!newCfg.VoWiFiEnabled && oldCfg.VoWiFiEnabled) ||
 		(worker != nil && managedNetworkConfigChanged(oldCfg, newCfg))
 	shouldApplyNetworkNow := worker != nil || needsRebuild
@@ -1460,12 +1555,19 @@ type addDeviceRequest struct {
 // validateDeviceBackendConfig 校验 device_backend 配置合法值。
 // 零路径持久化后 control_device 由运行时从 IMEI 发现，不再作为保存前置条件。
 func validateDeviceBackendConfig(cfg config.DeviceConfig) error {
-	backend := strings.ToLower(strings.TrimSpace(cfg.DeviceBackend))
-	switch backend {
+	mode := strings.ToLower(strings.TrimSpace(cfg.DeviceBackend))
+	switch mode {
 	case "", "at", "qmi", "mbim":
 		// 合法值
+	case backend.BackendPCSC:
+		if strings.TrimSpace(cfg.ReaderName) == "" {
+			return fmt.Errorf("PC/SC 线路缺少 reader_name")
+		}
+		if strings.TrimSpace(cfg.CardICCID) == "" {
+			return fmt.Errorf("PC/SC 线路缺少 card_iccid")
+		}
 	default:
-		return fmt.Errorf("不支持的 device_backend: %q，可选值: at, qmi, mbim", backend)
+		return fmt.Errorf("不支持的 device_backend: %q，可选值: at, qmi, mbim, pcsc", mode)
 	}
 	return nil
 }
@@ -1511,7 +1613,10 @@ func (s *Server) handleDeviceMgmtAddDevice(c *gin.Context) {
 		return
 	}
 	// MBIM 设备使用 MBIM DeviceCaps 探测 IMEI，非 MBIM 设备使用 QMI 探测
-	if strings.ToLower(strings.TrimSpace(newCfg.DeviceBackend)) == "mbim" {
+	if strings.EqualFold(strings.TrimSpace(newCfg.DeviceBackend), backend.BackendPCSC) {
+		newCfg.ESIMTransport = config.ESIMTransportPCSC
+		newCfg.ProvisioningState = pcscProvisioningStateForAPI(newCfg.ModemIMEI)
+	} else if strings.ToLower(strings.TrimSpace(newCfg.DeviceBackend)) == "mbim" {
 		if config.NormalizeIMEI(newCfg.ModemIMEI) == "" && strings.TrimSpace(newCfg.ControlDevice) != "" {
 			if mbimIMEI, err := device.ProbeIMEIViaMBIM(newCfg.ControlDevice); err == nil && mbimIMEI != "" {
 				newCfg.ModemIMEI = mbimIMEI

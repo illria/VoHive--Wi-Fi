@@ -36,7 +36,26 @@ func UpdateDeviceInFile(path string, deviceID string, newDevice DeviceConfig) er
 		} else {
 			deleteMapKey(n, "modem_imei")
 		}
-		setMapScalar(n, "device_backend", newDevice.DeviceBackend)
+		if newDevice.DeviceBackend != "" {
+			setMapScalar(n, "device_backend", newDevice.DeviceBackend)
+		} else {
+			deleteMapKey(n, "device_backend")
+		}
+		if strings.TrimSpace(newDevice.ReaderName) != "" {
+			setMapScalar(n, "reader_name", strings.TrimSpace(newDevice.ReaderName))
+		} else {
+			deleteMapKey(n, "reader_name")
+		}
+		if strings.TrimSpace(newDevice.CardICCID) != "" {
+			setMapScalar(n, "card_iccid", strings.TrimSpace(newDevice.CardICCID))
+		} else {
+			deleteMapKey(n, "card_iccid")
+		}
+		if strings.TrimSpace(newDevice.ProvisioningState) != "" {
+			setMapScalar(n, "provisioning_state", strings.TrimSpace(newDevice.ProvisioningState))
+		} else {
+			deleteMapKey(n, "provisioning_state")
+		}
 		if newDevice.QMIUseProxy {
 			setMapBool(n, "qmi_use_proxy", true)
 		} else {
@@ -173,6 +192,15 @@ func deviceConfigToNode(d DeviceConfig) *yaml.Node {
 	}
 	if d.DeviceBackend != "" {
 		appendMapScalar(m, "device_backend", d.DeviceBackend)
+	}
+	if strings.TrimSpace(d.ReaderName) != "" {
+		appendMapScalar(m, "reader_name", strings.TrimSpace(d.ReaderName))
+	}
+	if strings.TrimSpace(d.CardICCID) != "" {
+		appendMapScalar(m, "card_iccid", strings.TrimSpace(d.CardICCID))
+	}
+	if strings.TrimSpace(d.ProvisioningState) != "" {
+		appendMapScalar(m, "provisioning_state", strings.TrimSpace(d.ProvisioningState))
 	}
 	if d.QMIUseProxy {
 		appendMapBool(m, "qmi_use_proxy", true)

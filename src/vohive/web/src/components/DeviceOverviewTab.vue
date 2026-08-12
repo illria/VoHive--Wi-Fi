@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Eye24Regular, EyeOff24Regular } from '@vicons/fluent'
-import type { DeviceOverviewItem } from '../types/api'
+import type { DeviceOverviewItem, VoWiFiHistorySummary } from '../types/api'
 import { useSensitiveVisibility } from '../composables/useSensitiveVisibility'
 import { activeEsimProfileDisplayName } from './deviceOverviewActiveEsim'
 import { isControlOnline, isRadioRegistered, isRecoveryPhase, lifecycleStatusLabel } from '../utils/deviceLifecycle'
@@ -33,6 +33,35 @@ const showOperatorSelection = ref(false)
 const esimNoteEditing = ref(false)
 const esimNoteSaving = ref(false)
 const esimNoteValue = ref('')
+const vowifiHistory = ref<VoWiFiHistorySummary | null>(null)
+const vowifiHistoryLoading = ref(false)
+
+async function loadVoWiFiHistory() {
+  const id = props.device?.id
+  if (!id) {
+    vowifiHistory.value = null
+    return
+  }
+  vowifiHistoryLoading.value = true
+  const result = await devicesService.getVoWiFiHistory(id, 7, 50)
+  if (result.ok) vowifiHistory.value = result.data
+  vowifiHistoryLoading.value = false
+}
+
+watch(() => props.device?.id, () => { void loadVoWiFiHistory() }, { immediate: true })
+let historyTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => { historyTimer = setInterval(() => { void loadVoWiFiHistory() }, 30000) })
+onUnmounted(() => { if (historyTimer) clearInterval(historyTimer) })
+
+function formatHistoryTime(value?: string): string {
+  if (!value) return '--'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function formatAvailability(value?: number): string {
+  return `${Number(value || 0).toFixed(2)}%`
+}
 
 watch(() => props.device?.esim_note, (value) => {
   if (!esimNoteEditing.value) esimNoteValue.value = value || ''
@@ -398,7 +427,7 @@ const networkPanelMessage = computed(() => {
           <span class="text-gray-500">飞行模式</span>
           <span>{{ flightModeStatusText }}</span>
         </div>
-        <FieldRow label="运行模式"  :value="device?.backend_mode === 'qmi' ? 'QMI' : device?.backend_mode === 'mbim' ? 'MBIM' : device?.backend_mode === 'at' ? 'AT' : 'Auto'" monospace />
+		<FieldRow label="运行模式"  :value="device?.backend_mode === 'qmi' ? 'QMI' : device?.backend_mode === 'mbim' ? 'MBIM' : device?.backend_mode === 'pcsc' ? 'PC/SC' : device?.backend_mode === 'at' ? 'AT' : 'Auto'" monospace />
       </div>
     </div>
 
@@ -449,6 +478,43 @@ const networkPanelMessage = computed(() => {
         </div>
         <div v-else class="mt-1 whitespace-pre-wrap break-words text-gray-700 dark:text-gray-200">
           {{ device?.esim_note || '暂无备注' }}
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== VoWiFi 连接历史 ===== -->
+    <div v-if="device?.vowifi_enabled || (vowifiHistory?.events?.length || 0) > 0" class="ui-panel-muted p-4 lg:col-span-3">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+        <div>
+          <div class="text-xs font-bold text-gray-500 uppercase tracking-wider">VoWiFi 连接历史</div>
+          <div class="text-xs text-gray-400 mt-1">明确记录 SIM → Access → Tunnel → IMS → SMS 阶段；可用率按 SMS 就绪时间计算</div>
+        </div>
+        <div class="flex items-center gap-5 text-sm">
+          <span>7 天可用率 <b class="font-mono">{{ formatAvailability(vowifiHistory?.availability_percent) }}</b></span>
+          <span>成功 <b class="text-emerald-600">{{ vowifiHistory?.successes || 0 }}</b></span>
+          <span>失败 <b class="text-red-600">{{ vowifiHistory?.failures || 0 }}</b></span>
+          <el-button size="small" :loading="vowifiHistoryLoading" @click="loadVoWiFiHistory">刷新</el-button>
+        </div>
+      </div>
+
+      <div v-if="!vowifiHistory?.events?.length" class="py-5 text-center text-sm text-gray-400">暂无连接历史</div>
+      <div v-else class="max-h-64 overflow-auto divide-y divide-gray-200 dark:divide-white/10 border border-gray-200 dark:border-white/10 rounded-xl">
+        <div v-for="event in vowifiHistory.events" :key="event.id" class="p-3 grid grid-cols-1 sm:grid-cols-[150px_90px_1fr_auto] gap-2 text-sm">
+          <span class="text-gray-500 font-mono text-xs">{{ formatHistoryTime(event.created_at) }}</span>
+          <span class="font-bold" :class="event.phase === 'failed' ? 'text-red-600' : event.sms_ready ? 'text-emerald-600' : 'text-amber-600'">
+            {{ event.stage }}
+          </span>
+          <span class="min-w-0 break-words text-gray-700 dark:text-gray-200">
+            <span>
+              {{ event.reason || (event.sms_ready ? 'VoWiFi 全部就绪' : event.phase) }}
+              <span v-if="event.error_class" class="text-red-500 font-mono"> · {{ event.error_class }}</span>
+            </span>
+            <span v-if="event.detail && event.detail !== event.reason" class="block mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ event.detail }}
+            </span>
+          </span>
+          <span v-if="event.upstream_proxy_id" class="text-xs font-mono text-gray-500">出口 {{ event.upstream_proxy_id }}</span>
+          <span v-else class="text-xs text-gray-400">直连</span>
         </div>
       </div>
     </div>

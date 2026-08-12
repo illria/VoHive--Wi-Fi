@@ -613,6 +613,15 @@ func (m *Manager) SetSmartCardChannelFactory(factory func() (driver.SmartCardCha
 	m.smartCardChannelFactory = factory
 }
 
+// SetAPDUArbiter attaches the device-level APDU coordinator to managers that
+// use a custom smart-card channel (for example PC/SC readers).
+func (m *Manager) SetAPDUArbiter(arbiter *apduarbiter.Arbiter) {
+	if m == nil {
+		return
+	}
+	m.apduArbiter = arbiter
+}
+
 func (m *Manager) SeedDiscoveredEUICCs(infos []EUICCInfo) {
 	if m == nil {
 		return
